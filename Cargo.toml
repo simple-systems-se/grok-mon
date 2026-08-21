@@ -1,0 +1,26 @@
+[package]
+name = "cosmic-ext-applet-grok-monitor"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Unlicense"
+description = "COSMIC panel applet that shows Grok Build credit usage"
+repository = "https://github.com/simple-systems-se/grok-mon"
+
+[profile.release]
+lto = "thin"
+opt-level = 3
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+rev = "b812c77438e7d74857dbb1ff3308f2811673e54d"
+default-features = false
+features = ["applet", "applet-token", "tokio", "wayland"]

@@ -1,0 +1,9 @@
+{
+  "config": {
+    "currentPeriod": {
+      "end": "2026-09-01T00:00:00Z"
+    },
+    "onDemandCap": { "val": 1000 },
+    "onDemandUsed": { "val": 250 }
+  }
+}

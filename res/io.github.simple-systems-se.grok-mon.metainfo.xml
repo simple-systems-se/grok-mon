@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.simple-systems-se.grok-mon</id>
+  <name>Grok Monitor</name>
+  <summary>Grok Build credit usage in the COSMIC panel</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Unlicense</project_license>
+  <developer_name>Simple Systems</developer_name>
+  <description>
+    <p>
+      A COSMIC panel applet that shows current Grok Build credit usage,
+      matching the /usage view in the Grok CLI.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.simple-systems-se.grok-mon.desktop</launchable>
+  <provides>
+    <id>com.system76.CosmicApplet</id>
+    <binary>cosmic-ext-applet-grok-monitor</binary>
+  </provides>
+  <url type="homepage">https://github.com/simple-systems-se/grok-mon</url>
+  <content_rating type="oars-1.1"/>
+</component>

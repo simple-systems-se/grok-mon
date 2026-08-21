@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Grok Monitor
+Comment=Show Grok Build credit usage in the COSMIC panel
+Exec=cosmic-ext-applet-grok-monitor
+Terminal=false
+Type=Application
+StartupNotify=true
+NoDisplay=true
+Icon=io.github.simple-systems-se.grok-mon
+Categories=COSMIC;Utility;Monitor;
+Keywords=Grok;Usage;Credits;xAI;
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto

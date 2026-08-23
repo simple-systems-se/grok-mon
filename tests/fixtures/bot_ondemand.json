@@ -1,0 +1,6 @@
+{
+  "spendLimitUsage": {
+    "individualLimit": 1000,
+    "individualUsed": 250
+  }
+}

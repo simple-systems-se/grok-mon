@@ -1,9 +1,9 @@
-use crate::billing::{
-    FetchError, UsageSnapshot, fetch_usage, format_percent, format_remaining, period_label,
-};
-use crate::config::{APP_ID, Config, USAGE_URL};
+use super::launch;
+use super::roster::{BotRoster, live_roster};
+use super::usage::{BotSnapshot, FetchError, fetch_bot_usage};
+use crate::billing::{format_percent, format_remaining};
+use crate::config::{BOT_APP_ID, Config};
 use crate::ring::{RingIcon, usage_color, usage_ring};
-use crate::sessions::{LiveSessions, live_sessions};
 use chrono::Utc;
 use cosmic::app::Core;
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
@@ -17,7 +17,7 @@ use cosmic::{Element, Task, theme};
 use std::collections::VecDeque;
 use std::sync::LazyLock;
 
-static PANEL_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("grok-monitor-panel"));
+static PANEL_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("grok-bot-monitor-panel"));
 
 const HISTORY_LEN: usize = 24;
 
@@ -27,21 +27,22 @@ enum Page {
     Settings,
 }
 
-pub struct GrokMonitor {
+pub struct GrokBotMonitor {
     core: Core,
     popup: Option<Id>,
     config: Config,
     config_handler: Option<cosmic_config::Config>,
-    snapshot: Option<UsageSnapshot>,
+    snapshot: Option<BotSnapshot>,
     error: Option<FetchError>,
     history: VecDeque<f32>,
-    live: LiveSessions,
+    live: BotRoster,
     page: Page,
     size: Size,
     open_error: Option<String>,
+    fetching: bool,
 }
 
-impl Default for GrokMonitor {
+impl Default for GrokBotMonitor {
     fn default() -> Self {
         Self {
             core: Core::default(),
@@ -51,10 +52,11 @@ impl Default for GrokMonitor {
             snapshot: None,
             error: None,
             history: VecDeque::new(),
-            live: LiveSessions::default(),
+            live: BotRoster::default(),
             page: Page::Overview,
             size: Size::new(10.0, 10.0),
             open_error: None,
+            fetching: false,
         }
     }
 }
@@ -65,8 +67,8 @@ pub enum Message {
     TogglePopup,
     PopupClosed(Id),
     Size(Size),
-    UsageFetched(Result<UsageSnapshot, FetchError>),
-    OpenUsage,
+    UsageFetched(Result<BotSnapshot, FetchError>),
+    OpenApp,
     CopyPercent,
     ShowSettings,
     Back,
@@ -77,12 +79,12 @@ pub enum Message {
     ConfigChanged(Config),
 }
 
-impl cosmic::Application for GrokMonitor {
+impl cosmic::Application for GrokBotMonitor {
     type Executor = cosmic::executor::Default;
     type Flags = ();
     type Message = Message;
 
-    const APP_ID: &'static str = APP_ID;
+    const APP_ID: &'static str = BOT_APP_ID;
 
     fn core(&self) -> &Core {
         &self.core
@@ -143,34 +145,41 @@ impl cosmic::Application for GrokMonitor {
     fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
         match message {
             Message::Tick => {
-                self.live = live_sessions();
-                return Task::perform(fetch_usage(), |result| {
+                self.live = live_roster();
+                if self.fetching {
+                    return Task::none();
+                }
+                self.fetching = true;
+                return Task::perform(fetch_bot_usage(), |result| {
                     cosmic::action::Action::App(Message::UsageFetched(result))
                 });
             }
-            Message::UsageFetched(result) => match result {
-                Ok(snapshot) => {
-                    self.error = None;
-                    if self.history.len() == HISTORY_LEN {
-                        self.history.pop_front();
+            Message::UsageFetched(result) => {
+                self.fetching = false;
+                match result {
+                    Ok(snapshot) => {
+                        self.error = None;
+                        if self.history.len() == HISTORY_LEN {
+                            self.history.pop_front();
+                        }
+                        self.history.push_back(snapshot.percent);
+                        self.snapshot = Some(snapshot);
                     }
-                    self.history.push_back(snapshot.percent);
-                    self.snapshot = Some(snapshot);
-                }
-                Err(err) => {
-                    if matches!(err, FetchError::Auth(_)) {
-                        self.snapshot = None;
-                        self.history.clear();
+                    Err(err) => {
+                        if matches!(err, FetchError::Auth(_)) {
+                            self.snapshot = None;
+                            self.history.clear();
+                        }
+                        self.error = Some(err);
                     }
-                    self.error = Some(err);
                 }
-            },
+            }
             Message::TogglePopup => {
                 return if let Some(id) = self.popup.take() {
                     self.page = Page::Overview;
                     destroy_popup(id)
                 } else {
-                    self.live = live_sessions();
+                    self.live = live_roster();
                     let Some(parent) = self.core.main_window_id() else {
                         tracing::warn!("popup requested with no main window");
                         return Task::none();
@@ -205,15 +214,18 @@ impl cosmic::Application for GrokMonitor {
             Message::Size(size) => {
                 self.size = size;
             }
-            Message::OpenUsage => match crate::spawn::spawn_detached("xdg-open", &[USAGE_URL]) {
+            Message::OpenApp => match launch::open_grok_bot() {
                 Ok(()) => self.open_error = None,
                 Err(err) => {
-                    tracing::error!("{err}");
+                    tracing::error!("failed to open Grok Bot: {err}");
                     self.open_error = Some(err);
                 }
             },
             Message::CopyPercent => {
                 if let Some(snapshot) = &self.snapshot {
+                    if snapshot.enterprise {
+                        return cosmic::iced::clipboard::write("n/a".into());
+                    }
                     return cosmic::iced::clipboard::write(format_percent(
                         self.config.display_percent(snapshot.percent),
                     ));
@@ -299,7 +311,7 @@ impl cosmic::Application for GrokMonitor {
     }
 }
 
-impl GrokMonitor {
+impl GrokBotMonitor {
     fn save_config(&mut self) {
         if let Some(handler) = &self.config_handler
             && let Err(e) = self.config.write_entry(handler)
@@ -314,9 +326,15 @@ impl GrokMonitor {
         let percent = self
             .snapshot
             .as_ref()
-            .map(|s| self.config.display_percent(s.percent))
+            .map(|s| {
+                if s.enterprise {
+                    0.0
+                } else {
+                    self.config.display_percent(s.percent)
+                }
+            })
             .unwrap_or(0.0);
-        let svg = usage_ring(percent, color, track, RingIcon::Hammer);
+        let svg = usage_ring(percent, color, track, RingIcon::Bot);
         let size = self
             .core
             .applet
@@ -335,6 +353,13 @@ impl GrokMonitor {
         let theme = theme::active();
         let cosmic = theme.cosmic();
         match (&self.snapshot, &self.error) {
+            (Some(snapshot), err) if snapshot.enterprise => {
+                let mut color: Color = cosmic.on_bg_color().into();
+                if err.is_some() {
+                    color.a *= 0.7;
+                }
+                ("n/a".into(), color)
+            }
             (Some(snapshot), err) => {
                 let mut color = usage_color(snapshot.percent);
                 if err.is_some() {
@@ -371,13 +396,13 @@ impl GrokMonitor {
     }
 
     fn overview(&self) -> Element<'_, Message> {
-        let mut col = column::with_capacity(12).padding([12, 0]).spacing(8);
+        let mut col = column::with_capacity(14).padding([12, 0]).spacing(8);
 
         let title = self
             .snapshot
             .as_ref()
             .and_then(|s| s.plan.as_deref())
-            .unwrap_or("Grok Build");
+            .unwrap_or("Grok Bot");
         let email = self
             .snapshot
             .as_ref()
@@ -393,28 +418,39 @@ impl GrokMonitor {
         col = col.push(padded(divider::horizontal::default()));
 
         if let Some(snapshot) = &self.snapshot {
-            let shown = self.config.display_percent(snapshot.percent);
-            col = col.push(padded(self.gauge(shown)));
-
-            let mut detail = format!(
-                "{} · {}",
-                period_label(snapshot.period_type.as_deref()),
-                format_percent(shown)
-            );
-            if self.config.show_remaining {
-                detail.push_str(" remaining");
+            if snapshot.enterprise {
+                col = col.push(padded(text::body("Team usage unavailable")));
+            } else {
+                let shown = self.config.display_percent(snapshot.percent);
+                col = col.push(padded(self.gauge(shown)));
+                let mut detail = format!("Weekly · {}", format_percent(shown));
+                if self.config.show_remaining {
+                    detail.push_str(" remaining");
+                }
+                if let (Some(used), Some(limit)) = (snapshot.used_cents, snapshot.limit_cents) {
+                    detail = format!("{detail}  (${:.2} / ${:.2})", used / 100.0, limit / 100.0);
+                }
+                col = col.push(padded(text::body(detail)));
             }
-            if let (Some(used), Some(limit)) = (snapshot.used, snapshot.limit) {
-                detail = format!("{detail}  ({used:.0} / {limit:.0})");
-            }
-            col = col.push(padded(text::body(detail)));
 
             if let Some(end) = snapshot.resets_at {
                 col = col.push(padded(text::caption(format_remaining(end))));
             }
+            if let Some(trial) = snapshot.trial_expires_at {
+                col = col.push(padded(text::caption(format!(
+                    "trial {}",
+                    format_remaining(trial)
+                ))));
+            }
 
             let age = (Utc::now() - snapshot.fetched_at).num_seconds().max(0);
             col = col.push(padded(text::caption(format!("updated {age}s ago"))));
+        }
+
+        if self.snapshot.is_none() {
+            col = col.push(padded(text::caption(
+                "Reads Grok Bot’s login (keyring + sand-secrets.json) read-only. Unlock the login keyring if prompted.",
+            )));
         }
 
         if let Some(error) = &self.error {
@@ -433,30 +469,20 @@ impl GrokMonitor {
             }))));
         }
 
-        let session_line = if self.live.count == 0 {
-            "no live sessions".into()
+        col = col.push(padded(text::body(roster_line(&self.live))));
+        col = col.push(padded(text::caption(if self.live.running {
+            "Grok Bot running"
         } else {
-            format!(
-                "{} live · {}",
-                self.live.count,
-                self.live
-                    .names
-                    .iter()
-                    .take(3)
-                    .map(String::as_str)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        };
-        col = col.push(padded(text::body(session_line)));
+            "Grok Bot not running"
+        })));
 
         col = col.push(padded(divider::horizontal::default()));
 
         col = col.push(padded(
             row::with_capacity(3)
                 .push(
-                    button::standard("Open usage")
-                        .on_press(Message::OpenUsage)
+                    button::standard("Open Grok Bot")
+                        .on_press(Message::OpenApp)
                         .width(Length::Fill),
                 )
                 .push(
@@ -511,7 +537,7 @@ impl GrokMonitor {
         )));
 
         col = col.push(padded(text::caption(format!(
-            "Grok Monitor {}",
+            "Grok Bot Monitor {}",
             env!("CARGO_PKG_VERSION")
         ))));
 
@@ -540,6 +566,22 @@ impl GrokMonitor {
         .width(Length::Fill)
         .into()
     }
+}
+
+fn roster_line(live: &BotRoster) -> String {
+    if live.count == 0 {
+        return "no bots".into();
+    }
+    let mut line = format!(
+        "{} bots · {} unread · {}",
+        live.count,
+        live.unread,
+        live.names.join(", ")
+    );
+    if live.needs_you {
+        line.push_str(" · needs you");
+    }
+    line
 }
 
 fn mode_button<'a>(label: &'a str, remaining: bool, current: bool) -> Element<'a, Message> {

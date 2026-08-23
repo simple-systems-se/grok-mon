@@ -3,6 +3,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use zeroize::Zeroize;
 
 #[derive(Debug, Clone)]
 pub struct AuthIdentity {
@@ -35,6 +36,14 @@ struct AuthEntry {
     principal_type: Option<String>,
 }
 
+impl Drop for AuthEntry {
+    fn drop(&mut self) {
+        if let Some(ref mut key) = self.key {
+            key.zeroize();
+        }
+    }
+}
+
 pub struct Bearer {
     pub token: String,
     pub identity: AuthIdentity,
@@ -42,7 +51,7 @@ pub struct Bearer {
 
 impl Drop for Bearer {
     fn drop(&mut self) {
-        self.token.clear();
+        self.token.zeroize();
     }
 }
 
@@ -66,9 +75,15 @@ fn dirs_home() -> PathBuf {
 /// Read the current Grok Build OIDC token. Do not log or persist it.
 pub fn load_bearer() -> Result<Bearer, AuthError> {
     let path = grok_home().join("auth.json");
-    let raw = fs::read_to_string(&path).map_err(|_| AuthError::Missing)?;
-    let map: HashMap<String, AuthEntry> =
-        serde_json::from_str(&raw).map_err(|_| AuthError::Invalid)?;
+    let mut raw = fs::read_to_string(&path).map_err(|_| AuthError::Missing)?;
+    let map: HashMap<String, AuthEntry> = match serde_json::from_str(&raw) {
+        Ok(map) => map,
+        Err(_) => {
+            raw.zeroize();
+            return Err(AuthError::Invalid);
+        }
+    };
+    raw.zeroize();
 
     let mut preferred: Option<AuthEntry> = None;
     let mut fallback: Option<AuthEntry> = None;
@@ -79,22 +94,26 @@ pub fn load_bearer() -> Result<Bearer, AuthError> {
             fallback = Some(entry);
         }
     }
-    let entry = preferred.or(fallback).ok_or(AuthError::Missing)?;
-    let token = entry.key.filter(|k| !k.is_empty()).ok_or(AuthError::Missing)?;
+    let mut entry = preferred.or(fallback).ok_or(AuthError::Missing)?;
+    let mut token = entry
+        .key
+        .take()
+        .filter(|k| !k.is_empty())
+        .ok_or(AuthError::Missing)?;
 
-    if let Some(expires) = entry.expires_at.as_deref() {
-        if let Ok(when) = DateTime::parse_from_rfc3339(expires) {
-            if when.with_timezone(&Utc) <= Utc::now() {
-                return Err(AuthError::Expired);
-            }
-        }
+    if let Some(expires) = entry.expires_at.as_deref()
+        && let Ok(when) = DateTime::parse_from_rfc3339(expires)
+        && when.with_timezone(&Utc) <= Utc::now()
+    {
+        token.zeroize();
+        return Err(AuthError::Expired);
     }
 
     Ok(Bearer {
         token,
         identity: AuthIdentity {
-            email: entry.email,
-            principal_type: entry.principal_type,
+            email: entry.email.take(),
+            principal_type: entry.principal_type.take(),
         },
     })
 }
@@ -109,7 +128,10 @@ mod tests {
             grok_home_from(Some("/tmp/grok-test-home".into())),
             PathBuf::from("/tmp/grok-test-home")
         );
-        assert_eq!(grok_home_from(Some(String::new())), dirs_home().join(".grok"));
+        assert_eq!(
+            grok_home_from(Some(String::new())),
+            dirs_home().join(".grok")
+        );
         assert_eq!(grok_home_from(None), dirs_home().join(".grok"));
     }
 }

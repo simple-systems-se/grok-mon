@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Grok Bot Monitor
+Comment=Show Grok Bot weekly usage in the COSMIC panel
+Exec=cosmic-ext-applet-grok-monitor --product=bot
+Terminal=false
+Type=Application
+StartupNotify=true
+NoDisplay=true
+Icon=io.github.simple-systems-se.grok-mon-bot
+Categories=COSMIC;Utility;Monitor;
+Keywords=Grok;Bot;Usage;Credits;xAI;
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 2,
+  "value": {
+    "rows": [
+      {
+        "id": "hidden",
+        "name": "Hidden Bot",
+        "unreadCount": 9,
+        "lastActivityAt": 300,
+        "isHiddenFromSidebar": true
+      },
+      {
+        "id": "research",
+        "name": "Research",
+        "unreadCount": 1,
+        "lastActivityAt": 100,
+        "isHiddenFromSidebar": false
+      },
+      {
+        "id": "chief",
+        "name": "Chief",
+        "unreadCount": 2,
+        "lastActivityAt": 200,
+        "isHiddenFromSidebar": false,
+        "awaitingUserResponse": true
+      }
+    ]
+  }
+}

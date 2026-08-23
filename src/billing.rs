@@ -180,7 +180,7 @@ fn http_client() -> Result<reqwest::Client, FetchError> {
 }
 
 fn auth_headers(token: &str) -> Result<reqwest::header::HeaderMap, FetchError> {
-    use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
+    use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
     let mut headers = HeaderMap::new();
     let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
         .map_err(|_| FetchError::Auth(AuthError::Invalid))?;
@@ -222,10 +222,10 @@ pub async fn fetch_usage() -> Result<UsageSnapshot, FetchError> {
     snapshot.email = bearer.identity.email.clone();
     apply_team_guard(&bearer.identity, &mut snapshot);
 
-    if let Ok(plan) = fetch_plan(&client, headers).await {
-        if snapshot.plan.is_none() {
-            snapshot.plan = plan;
-        }
+    if let Ok(plan) = fetch_plan(&client, headers).await
+        && snapshot.plan.is_none()
+    {
+        snapshot.plan = plan;
     }
 
     Ok(snapshot)

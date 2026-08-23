@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.simple-systems-se.grok-mon</id>
-  <name>Grok Monitor</name>
-  <summary>Grok Build credit usage in the COSMIC panel</summary>
+  <id>io.github.simple-systems-se.grok-mon-bot</id>
+  <name>Grok Bot Monitor</name>
+  <summary>Grok Bot weekly usage in the COSMIC panel</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>Unlicense</project_license>
   <developer id="io.github.simple-systems-se">
@@ -10,15 +10,16 @@
   </developer>
   <description>
     <p>
-      A panel applet for the COSMIC™ desktop that shows current Grok Build
-      credit usage, matching the /usage view in the Grok CLI.
+      A panel applet for the COSMIC™ desktop that shows current Grok Bot weekly
+      usage from the Grok Bot desktop app, plus a short list of live bots.
     </p>
     <p>
-      This unofficial applet reads the Grok CLI session on disk (read-only)
-      and calls the Grok CLI billing endpoint. It is not affiliated with xAI.
+      This unofficial applet decrypts the Grok Bot local session (keyring plus
+      sand-secrets.json, read-only) and calls Cursor’s private usage endpoints.
+      It is not affiliated with Cursor or xAI.
     </p>
   </description>
-  <launchable type="desktop-id">io.github.simple-systems-se.grok-mon.desktop</launchable>
+  <launchable type="desktop-id">io.github.simple-systems-se.grok-mon-bot.desktop</launchable>
   <provides>
     <id>com.system76.CosmicApplet</id>
     <binary>cosmic-ext-applet-grok-monitor</binary>

@@ -5,3 +5,8 @@
 *.swp
 *~
 .DS_Store
+.env
+.env.*
+credentials.json
+auth.json
+sand-secrets.json

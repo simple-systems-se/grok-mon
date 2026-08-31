@@ -3,11 +3,13 @@ use cosmic::iced::Color;
 const HAMMER: &str =
     r#"<path d="M6.6 13.2 L10.4 6.2"/><path d="M8.2 4.2 L12.4 6.6 L11.3 8.6 L7.1 6.2 Z"/>"#;
 const BOT: &str = r#"<rect x="3.3" y="5.5" width="9.4" height="7.2" rx="2.1"/><path d="M8 5.5V3.3"/><path d="M5.8 8.7h1.4"/><path d="M8.8 8.7h1.4"/>"#;
+const KEY: &str = r#"<circle cx="6.2" cy="8" r="2.3"/><path d="M8.5 8h5.2"/><path d="M11.8 8v2.2"/><path d="M13.7 8v1.4"/>"#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RingIcon {
     Hammer,
     Bot,
+    Key,
 }
 
 const GREEN: [f32; 3] = [0.18, 0.72, 0.32];
@@ -55,6 +57,7 @@ pub fn usage_ring(percent: f32, fill: Color, track: Color, icon: RingIcon) -> St
     let glyph = match icon {
         RingIcon::Hammer => HAMMER,
         RingIcon::Bot => BOT,
+        RingIcon::Key => KEY,
     };
     let clip_h = (f64::from(pct) / 100.0) * (2.0 * 12.9155);
     let clip_y = (17.0 + 12.9155) - clip_h;
@@ -113,6 +116,14 @@ mod tests {
         let svg = usage_ring(140.0, Color::WHITE, Color::BLACK, RingIcon::Bot);
         assert!(svg.contains("stroke-dasharray=\"100, 100\""));
         assert!(svg.contains("M8 5.5V3.3"));
+    }
+
+    #[test]
+    fn ring_picks_key_glyph() {
+        let svg = usage_ring(40.0, Color::WHITE, Color::BLACK, RingIcon::Key);
+        assert!(svg.contains("M8.5 8h5.2"));
+        assert!(!svg.contains("M6.6 13.2"));
+        assert!(!svg.contains("M8 5.5V3.3"));
     }
 
     #[test]

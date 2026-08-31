@@ -1,0 +1,16 @@
+{
+  "apiKeys": [
+    {
+      "name": "prod",
+      "redactedApiKey": "xai-...oYZ4",
+      "apiKeyId": "fe15b799-32e1-4d02-9e65-80236f9995f7",
+      "disabled": false
+    },
+    {
+      "name": "old",
+      "redactedApiKey": "xai-...abcd",
+      "apiKeyId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "disabled": "true"
+    }
+  ]
+}

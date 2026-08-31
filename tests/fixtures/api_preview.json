@@ -1,0 +1,13 @@
+{
+  "coreInvoice": {
+    "lines": [],
+    "prepaidCredits": { "val": "-890" },
+    "prepaidCreditsUsed": { "val": "344" }
+  },
+  "effectiveSpendingLimit": "0",
+  "defaultCredits": "0",
+  "billingCycle": {
+    "year": 2026,
+    "month": 8
+  }
+}

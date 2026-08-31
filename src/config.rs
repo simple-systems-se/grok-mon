@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 
 pub const APP_ID: &str = "io.github.simple-systems-se.grok-mon";
 pub const BOT_APP_ID: &str = "io.github.simple-systems-se.grok-mon-bot";
+pub const API_APP_ID: &str = "io.github.simple-systems-se.grok-mon-api";
 pub const USAGE_URL: &str = "https://grok.com/?_s=usage";
+pub const CONSOLE_URL: &str = "https://console.x.ai";
 
 fn default_true() -> bool {
     true

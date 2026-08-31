@@ -4,11 +4,11 @@ use std::process::Command;
 
 const DESKTOP_NAMES: &[&str] = &["sand.desktop", "grok-bot.desktop"];
 const BIN_CANDIDATES: &[&str] = &[
+    "/opt/Grok Bot/grok-bot",
     "/opt/Grok Bot/sand",
     "/usr/bin/grok-bot",
     "/usr/local/bin/grok-bot",
     "/usr/bin/sand",
-    "/opt/grokbot-linux-port/grok-bot",
 ];
 
 pub fn open_grok_bot() -> Result<(), String> {

@@ -183,6 +183,13 @@ fn access_token_from_secrets(
     password: &[u8],
 ) -> Result<String, AuthError> {
     let mut fallback_err = None;
+    if map.get("cursor-accounts").is_some() {
+        match access_token_from_accounts(map, password) {
+            Ok(token) => return Ok(token),
+            Err(err @ AuthError::Expired) => return Err(err),
+            Err(err) => fallback_err = Some(err),
+        }
+    }
     if let Some(stored) = json_str(map, "cursor-access-token") {
         match decrypt_stored(stored, password) {
             Ok(token) => return Ok(token),
@@ -190,11 +197,7 @@ fn access_token_from_secrets(
             Err(err) => fallback_err = Some(err),
         }
     }
-    match access_token_from_accounts(map, password) {
-        Ok(token) => Ok(token),
-        Err(AuthError::Missing) => Err(fallback_err.unwrap_or(AuthError::Missing)),
-        Err(err) => Err(err),
-    }
+    Err(fallback_err.unwrap_or(AuthError::Missing))
 }
 
 fn access_token_from_accounts(
@@ -529,7 +532,7 @@ mod tests {
     }
 
     #[test]
-    fn prefers_top_level_access_token() {
+    fn prefers_active_accounts_token() {
         let top = sample_token();
         let nested =
             "eyJhbGciOiJI.eyJlbWFpbCI6Im90aGVyQGV4YW1wbGUuY29tIiwiZXhwIjo0MTAyNDQ0ODAwfQ.sig";
@@ -540,8 +543,8 @@ mod tests {
         })
         .to_string();
         let bearer = bearer_from_secrets_json(&json, PASSWORD).unwrap();
-        assert_eq!(bearer.token, top);
-        assert_eq!(bearer.email.as_deref(), Some("bot@example.com"));
+        assert_eq!(bearer.token, nested);
+        assert_eq!(bearer.email.as_deref(), Some("other@example.com"));
     }
 
     #[test]

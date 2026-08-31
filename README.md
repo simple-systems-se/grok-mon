@@ -3,7 +3,8 @@
 A panel applet for the [COSMIC™](https://github.com/pop-os/cosmic-epoch) desktop that shows current
 Grok Build credit usage. It uses the same billing endpoint as `/usage` in the
 Grok CLI. A second applet, **Grok Bot Monitor**, shows Grok Bot weekly usage
-from the Grok Bot desktop app.
+from the Grok Bot desktop app. A third applet, **Grok API Monitor**, shows
+remaining prepaid dollars for xAI API tokens.
 
 This is an unofficial community project. It is not affiliated with, endorsed by,
 or supported by xAI or Cursor.
@@ -29,6 +30,12 @@ Grok Bot Monitor:
   unlock Grok Bot’s Safe Storage item
 - A launchable Grok Bot desktop file (`sand.desktop` or `grok-bot.desktop`) if
   you want **Open Grok Bot** to work
+
+Grok API Monitor:
+
+- A [Management API key](https://docs.x.ai/developers/management-api-guide)
+  from the [xAI Console](https://console.x.ai) (Settings → Management Keys)
+  with billing read access. Inference keys (`XAI_API_KEY`) do not work.
 
 On Debian, Ubuntu, and Pop!_OS:
 
@@ -78,10 +85,22 @@ install -Dm0644 res/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok
   ~/.local/share/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-bot-symbolic.svg
 install -Dm0644 res/io.github.simple-systems-se.grok-mon-bot.metainfo.xml \
   ~/.local/share/metainfo/io.github.simple-systems-se.grok-mon-bot.metainfo.xml
+
+sed "s|^Exec=.*|Exec=$HOME/.local/bin/cosmic-ext-applet-grok-monitor --product=api|" \
+  res/io.github.simple-systems-se.grok-mon-api.desktop \
+  > ~/.local/share/applications/io.github.simple-systems-se.grok-mon-api.desktop
+
+install -Dm0644 res/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-api.svg \
+  ~/.local/share/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-api.svg
+install -Dm0644 res/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-api.svg \
+  ~/.local/share/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-api-symbolic.svg
+install -Dm0644 res/io.github.simple-systems-se.grok-mon-api.metainfo.xml \
+  ~/.local/share/metainfo/io.github.simple-systems-se.grok-mon-api.metainfo.xml
 ```
 
-Add **Grok Monitor** or **Grok Bot Monitor** in **COSMIC Settings → Desktop →
-Panel → Applets**. If they do not appear, restart the panel:
+Add **Grok Monitor**, **Grok Bot Monitor**, or **Grok API Monitor** in
+**COSMIC Settings → Desktop → Panel → Applets**. If they do not appear, restart
+the panel:
 
 ```sh
 pkill cosmic-panel
@@ -90,11 +109,14 @@ pkill cosmic-panel
 ## Usage
 
 The panel chip shows a circular usage ring (the same shape Minimon uses for
-memory) with a small **hammer** (Build) or **robot** (Bot) in the center. By
-default it also shows current usage as a whole percent. Settings can hide the
-number or switch the number and ring fill to percent remaining. Color follows
-percent **used**, stepped each whole percent: green 0–50%, yellow 50–80%,
-orange 80–90%, red 90%+.
+memory) with a small **hammer** (Build), **robot** (Bot), or **key** (API) in
+the center. By default Build and Bot also show current usage as a whole
+percent; API shows remaining prepaid dollars. Settings can hide the number or
+(for Build and Bot) switch the number and ring fill to percent remaining.
+Color follows percent **used**, stepped each whole percent: green 0–50%, yellow
+50–80%, orange 80–90%, red 90%+. For API, that percent used is remaining
+prepaid mapped against a $50 full wallet (green above $25, yellow through $10,
+orange through $5, red under $5).
 
 Click the chip for a popup with:
 
@@ -116,7 +138,8 @@ Panel states:
 | `?` | Request failed, and there is no previous reading |
 | dimmed percent | Last good reading; the latest poll failed |
 
-If you see `—`, run `grok login` and wait for the next poll.
+If you see `—` on Grok Monitor, run `grok login` and wait for the next poll.
+On Grok API Monitor, add a Management API key (see below).
 
 ## Grok Bot Monitor
 
@@ -136,6 +159,41 @@ wait for the next poll.
 This is not Grok Chat. The Grok CLI billing `productUsage` list has GrokBuild
 and GrokChat; Grok Bot usage is a Cursor Sand ledger.
 
+## Grok API Monitor
+
+A third applet, launched as `cosmic-ext-applet-grok-monitor --product=api`.
+It is independent of the others: separate panel chip, settings, and credentials.
+
+The chip shows remaining **prepaid API dollars** (the same remaining-credit
+figure as [console.x.ai](https://console.x.ai) billing). Click for optional
+spend this billing period, up to three API key names on the team, and
+**Open console**.
+
+Auth is a **Management API key**, not an inference API token. Create one in the
+xAI Console under **Settings → Management Keys** with billing read access, then
+write it to `~/.config/grok-mon-api/credentials.json` (`chmod 600` recommended):
+
+```json
+{
+  "management_key": "xai-...",
+  "team_id": "optional-uuid"
+}
+```
+
+`team_id` is optional for a team-scoped key (the applet reads it from key
+validation). Organization-scoped keys need `team_id` or `XAI_TEAM_ID`.
+Environment variables `XAI_MANAGEMENT_API_KEY` (or `XAI_MANAGEMENT_KEY`) and
+`XAI_TEAM_ID` override the file when the panel process has them.
+
+The applet prefers live remaining from the invoice preview
+(`/v1/billing/teams/{team}/postpaid/invoice/preview`) and falls back to the
+posted prepaid ledger (`/v1/billing/teams/{team}/prepaid/balance`). Ledger
+amounts are inverted USD cents (`"-1000"` is $10 remaining). The applet never
+treats a missing total as $0.00.
+
+If you see `—`, the Management API key is missing or rejected. Inference keys
+(`XAI_API_KEY`) are not accepted.
+
 ## Settings
 
 Open the popup and choose **Settings**.
@@ -145,14 +203,19 @@ Open the popup and choose **Settings**.
 | Poll interval | 30s, 60s, 5m | 60s |
 | Sparkline on panel | on / off | off |
 | Percent on panel | on / off | on |
+| Amount on panel (API) | on / off | on |
 | Panel number | used / remaining | used |
 
 The ring fill matches the panel number (used or remaining). Color is always
 based on percent used: green through 50%, yellow through 80%, orange through
 90%, red above that, with a distinct shade at each whole percent. Settings are
 stored in COSMIC config under app id
-`io.github.simple-systems-se.grok-mon` (Build) or
-`io.github.simple-systems-se.grok-mon-bot` (Bot).
+`io.github.simple-systems-se.grok-mon` (Build),
+`io.github.simple-systems-se.grok-mon-bot` (Bot), or
+`io.github.simple-systems-se.grok-mon-api` (API).
+
+API has no used/remaining toggle: the chip is remaining dollars. The ring is
+full at $50 remaining.
 
 ## Authentication
 
@@ -174,7 +237,12 @@ private usage endpoints (`api2.cursor.sh` DashboardService). Those APIs are
 unsupported and can change or break without notice. This project is not
 affiliated with, endorsed by, or supported by Cursor or xAI.
 
-Neither applet writes credentials.
+Grok API Monitor reads a Management API key from
+`~/.config/grok-mon-api/credentials.json` and/or `XAI_MANAGEMENT_API_KEY`
+(`XAI_MANAGEMENT_KEY`) plus optional `XAI_TEAM_ID`. It does not write that
+file. Inference keys are rejected.
+
+None of the applets write credentials.
 
 ## Privacy
 
@@ -196,7 +264,17 @@ Grok Bot Monitor:
   `GetCurrentPeriodUsage`), plus `x-cursor-checksum` (derived from the local
   machine id), `x-cursor-client-version`, and a random `x-request-id`.
 
-Neither applet:
+Grok API Monitor:
+
+- Reads `~/.config/grok-mon-api/credentials.json` and the
+  `XAI_MANAGEMENT_API_KEY` / `XAI_MANAGEMENT_KEY` / `XAI_TEAM_ID` environment
+  variables when present.
+- Sends the Management API key only to `https://management-api.x.ai`
+  (`/auth/management-keys/validation`, `/v1/billing/teams/{team}/prepaid/balance`,
+  `/v1/billing/teams/{team}/postpaid/invoice/preview`,
+  `/auth/teams/{team}/api-keys`).
+
+None of the applets:
 
 - Writes credentials back to disk.
 - Logs tokens. The Authorization header and Bot checksum header are marked
@@ -215,16 +293,20 @@ Without `just`:
 rm -f ~/.local/bin/cosmic-ext-applet-grok-monitor \
   ~/.local/share/applications/io.github.simple-systems-se.grok-mon.desktop \
   ~/.local/share/applications/io.github.simple-systems-se.grok-mon-bot.desktop \
+  ~/.local/share/applications/io.github.simple-systems-se.grok-mon-api.desktop \
   ~/.local/share/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon.svg \
   ~/.local/share/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-symbolic.svg \
   ~/.local/share/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-bot.svg \
   ~/.local/share/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-bot-symbolic.svg \
+  ~/.local/share/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-api.svg \
+  ~/.local/share/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-api-symbolic.svg \
   ~/.local/share/metainfo/io.github.simple-systems-se.grok-mon.metainfo.xml \
-  ~/.local/share/metainfo/io.github.simple-systems-se.grok-mon-bot.metainfo.xml
+  ~/.local/share/metainfo/io.github.simple-systems-se.grok-mon-bot.metainfo.xml \
+  ~/.local/share/metainfo/io.github.simple-systems-se.grok-mon-api.metainfo.xml
 ```
 
-Then remove **Grok Monitor** or **Grok Bot Monitor** from the panel if they are
-still listed.
+Then remove **Grok Monitor**, **Grok Bot Monitor**, or **Grok API Monitor** from
+the panel if they are still listed.
 
 Settings stay in COSMIC config until you purge them:
 
@@ -237,7 +319,10 @@ That also removes:
 ```
 ~/.config/cosmic/io.github.simple-systems-se.grok-mon/
 ~/.config/cosmic/io.github.simple-systems-se.grok-mon-bot/
+~/.config/cosmic/io.github.simple-systems-se.grok-mon-api/
 ```
+
+It does not delete `~/.config/grok-mon-api/credentials.json`.
 
 ## Development
 
@@ -247,6 +332,7 @@ just check
 just build-release
 just run
 just run -- --product=bot
+just run -- --product=api
 ```
 
 Or with Cargo:
@@ -257,6 +343,7 @@ cargo clippy --all-targets -- -D warnings
 cargo build --release
 RUST_LOG=cosmic_ext_applet_grok_monitor=info cargo run --release
 RUST_LOG=cosmic_ext_applet_grok_monitor=info cargo run --release -- --product=bot
+RUST_LOG=cosmic_ext_applet_grok_monitor=info cargo run --release -- --product=api
 ```
 
 ## License

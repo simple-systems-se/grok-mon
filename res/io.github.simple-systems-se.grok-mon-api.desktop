@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Grok API Monitor
+Comment=Show remaining xAI API prepaid credits in the COSMIC panel
+Exec=cosmic-ext-applet-grok-monitor --product=api
+Terminal=false
+Type=Application
+StartupNotify=true
+NoDisplay=true
+Icon=io.github.simple-systems-se.grok-mon-api
+Categories=COSMIC;Utility;Monitor;
+Keywords=Grok;API;Usage;Credits;xAI;Tokens;
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto

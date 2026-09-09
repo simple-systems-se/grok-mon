@@ -449,7 +449,7 @@ impl GrokBotMonitor {
 
         if self.snapshot.is_none() {
             col = col.push(padded(text::caption(
-                "Reads Grok Bot’s login (keyring + sand-secrets.json) read-only. Unlock the login keyring if prompted.",
+                "Reads Grok Bot’s login (sand-secrets.json) read-only. Unlock the login keyring only if v11 secrets need it.",
             )));
         }
 

@@ -39,6 +39,7 @@ pub struct GrokMonitor {
     page: Page,
     size: Size,
     open_error: Option<String>,
+    fetching: bool,
 }
 
 impl Default for GrokMonitor {
@@ -55,6 +56,7 @@ impl Default for GrokMonitor {
             page: Page::Overview,
             size: Size::new(10.0, 10.0),
             open_error: None,
+            fetching: false,
         }
     }
 }
@@ -144,27 +146,34 @@ impl cosmic::Application for GrokMonitor {
         match message {
             Message::Tick => {
                 self.live = live_sessions();
+                if self.fetching {
+                    return Task::none();
+                }
+                self.fetching = true;
                 return Task::perform(fetch_usage(), |result| {
                     cosmic::action::Action::App(Message::UsageFetched(result))
                 });
             }
-            Message::UsageFetched(result) => match result {
-                Ok(snapshot) => {
-                    self.error = None;
-                    if self.history.len() == HISTORY_LEN {
-                        self.history.pop_front();
+            Message::UsageFetched(result) => {
+                self.fetching = false;
+                match result {
+                    Ok(snapshot) => {
+                        self.error = None;
+                        if self.history.len() == HISTORY_LEN {
+                            self.history.pop_front();
+                        }
+                        self.history.push_back(snapshot.percent);
+                        self.snapshot = Some(snapshot);
                     }
-                    self.history.push_back(snapshot.percent);
-                    self.snapshot = Some(snapshot);
-                }
-                Err(err) => {
-                    if matches!(err, FetchError::Auth(_)) {
-                        self.snapshot = None;
-                        self.history.clear();
+                    Err(err) => {
+                        if matches!(err, FetchError::Auth(_)) {
+                            self.snapshot = None;
+                            self.history.clear();
+                        }
+                        self.error = Some(err);
                     }
-                    self.error = Some(err);
                 }
-            },
+            }
             Message::TogglePopup => {
                 return if let Some(id) = self.popup.take() {
                     self.page = Page::Overview;

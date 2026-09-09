@@ -26,8 +26,8 @@ Grok Monitor (Build):
 Grok Bot Monitor:
 
 - The Grok Bot desktop app, signed in
-- An unlocked login keyring (Secret Service). The first poll may prompt to
-  unlock Grok Bot’s Safe Storage item
+- For v11 secrets, an unlocked login keyring (Secret Service). Chromium v10
+  secrets (typical on COSMIC) do not need the keyring
 - A launchable Grok Bot desktop file (`sand.desktop` or `grok-bot.desktop`) if
   you want **Open Grok Bot** to work
 
@@ -150,9 +150,10 @@ The chip shows Grok Bot weekly usage as a whole percent (or `n/a` on an
 enterprise pool). Click for reset time, optional on-demand spend, whether the
 Grok Bot app is running, and up to three recently active bots.
 
-Auth comes from the Grok Bot desktop app (`~/.config/Grok Bot/sand-secrets.json`
-plus the login keyring). Tokens are read-only. The applet uses the active
-account in `cursor-accounts` and still accepts the older top-level
+Auth comes from the Grok Bot desktop app (`~/.config/Grok Bot/sand-secrets.json`).
+Tokens are read-only. Chromium v10 blobs use OSCrypt’s built-in password;
+v11 blobs use the login keyring item `application=Grok Bot`. The applet uses
+the active account in `cursor-accounts` and still accepts the older top-level
 `cursor-access-token` field. If you see `—`, open Grok Bot and sign in, then
 wait for the next poll.
 
@@ -224,13 +225,18 @@ Grok Monitor reads the Grok CLI’s OIDC bearer from `~/.grok/auth.json` (or
 entry written by `grok login`.
 
 Grok Bot Monitor decrypts the Cursor access token stored by the Grok Bot app
-in `~/.config/Grok Bot/sand-secrets.json` using the login keyring item
-`application=Grok Bot` (preferring `xdg:schema=chrome_libsecret_os_crypt_password_v2`).
-The system may prompt to unlock that item; the prompt is labeled by Grok Bot,
-not by this applet. It prefers the active `cursor-accounts` entry and falls
-back to a top-level `cursor-access-token` if that older layout is still
-present. It does not refresh tokens. When Grok Bot refreshes them, the next
-poll picks up the new file contents.
+in `~/.config/Grok Bot/sand-secrets.json`. Chromium v10 ciphertext uses the
+built-in OSCrypt password (`peanuts`); v11 ciphertext uses the login keyring
+item `application=Grok Bot` (preferring
+`xdg:schema=chrome_libsecret_os_crypt_password_v2`). On COSMIC, Grok Bot
+typically writes v10 because Chromium does not treat COSMIC as a libsecret
+desktop, so a leftover Safe Storage keyring item is ignored when it no longer
+matches the file. The system may prompt to unlock the keyring for v11; that
+prompt is labeled by Grok Bot, not by this applet. The applet prefers the
+active `cursor-accounts` entry and falls back to a top-level
+`cursor-access-token` if that older layout is still present. It does not
+refresh tokens. When Grok Bot refreshes them, the next poll picks up the new
+file contents.
 
 Bot mode is unofficial. It reuses the local Grok Bot session to call Cursor’s
 private usage endpoints (`api2.cursor.sh` DashboardService). Those APIs are

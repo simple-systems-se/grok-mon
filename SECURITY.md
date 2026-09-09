@@ -1,8 +1,9 @@
 # Security
 
 Grok Monitor reads the Grok CLI session under `~/.grok`. Grok Bot Monitor
-decrypts the Grok Bot desktop app’s local session (`sand-secrets.json` plus the
-login keyring item for `application=Grok Bot`) and calls Cursor usage endpoints
+decrypts the Grok Bot desktop app’s local session (`sand-secrets.json`, the
+Chromium v10 OSCrypt password, and the login keyring item for
+`application=Grok Bot` when the file is v11) and calls Cursor usage endpoints
 with that token. Grok API Monitor reads a Management API key from
 `~/.config/grok-mon-api/credentials.json` and/or `XAI_MANAGEMENT_API_KEY` and
 calls xAI’s Management API billing endpoints.

@@ -376,14 +376,7 @@ impl GrokApiMonitor {
         let subtitle = self
             .snapshot
             .as_ref()
-            .map(|s| {
-                let id = &s.team_id;
-                if id.len() > 8 {
-                    format!("team {}", &id[..8])
-                } else {
-                    format!("team {id}")
-                }
-            })
+            .map(|s| team_caption(&s.team_id))
             .unwrap_or_default();
 
         col = col.push(padded(
@@ -526,6 +519,11 @@ impl GrokApiMonitor {
     }
 }
 
+fn team_caption(id: &str) -> String {
+    let prefix: String = id.chars().take(8).collect();
+    format!("team {prefix}")
+}
+
 fn tokens_line(tokens: &[ApiToken]) -> String {
     let active: Vec<&ApiToken> = tokens.iter().filter(|t| !t.disabled).collect();
     if active.is_empty() {
@@ -593,5 +591,12 @@ mod tests {
         ];
         assert_eq!(tokens_line(&tokens), "1 API key · prod");
         assert_eq!(tokens_line(&[]), "no API keys");
+    }
+
+    #[test]
+    fn team_caption_truncates_on_char_boundary() {
+        assert_eq!(team_caption("65c1e471-205f-4566-9c5a"), "team 65c1e471");
+        assert_eq!(team_caption("ab"), "team ab");
+        assert_eq!(team_caption("€€€"), "team €€€");
     }
 }

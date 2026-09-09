@@ -14,6 +14,10 @@ const SCOPED_PREFIX: &str = "scoped:v1:";
 const ACCOUNT_SCOPE_LEN: usize = 64;
 const OSCRYPT_SALT: &[u8] = b"saltysalt";
 const OSCRYPT_ROUNDS: u32 = 1;
+/// Chromium OSCrypt v10 hardcoded password. COSMIC is not a libsecret desktop
+/// in Chromium, so Grok Bot encrypts `sand-secrets.json` with this key and
+/// leaves any leftover "Chromium Safe Storage" item stale.
+const OSCRYPT_V10_PASSWORD: &[u8] = b"peanuts";
 
 type Aes128CbcDec = Decryptor<Aes128>;
 
@@ -54,7 +58,8 @@ pub fn grok_bot_config_dir() -> PathBuf {
 }
 
 fn grok_bot_config_dir_from(xdg: Option<PathBuf>) -> PathBuf {
-    xdg.unwrap_or_else(|| dirs_home().join(".config"))
+    xdg.filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| dirs_home().join(".config"))
         .join("Grok Bot")
 }
 
@@ -107,11 +112,33 @@ pub fn decrypt_oscrypt(ciphertext: &[u8], password: &[u8]) -> Result<Vec<u8>, Au
     if prefix != b"v10" && prefix != b"v11" {
         return Err(AuthError::Invalid);
     }
+    let body = &ciphertext[3..];
+    let mut last_err = AuthError::Invalid;
+    for candidate in oscrypt_passwords(password) {
+        match decrypt_oscrypt_with(body, candidate) {
+            Ok(plain) => return Ok(plain),
+            Err(err) => last_err = err,
+        }
+    }
+    Err(last_err)
+}
+
+fn decrypt_oscrypt_with(body: &[u8], password: &[u8]) -> Result<Vec<u8>, AuthError> {
     let key = pbkdf2_hmac_array::<Sha1, 16>(password, OSCRYPT_SALT, OSCRYPT_ROUNDS);
     let iv = [b' '; 16];
     Aes128CbcDec::new(&key.into(), &iv.into())
-        .decrypt_padded_vec_mut::<Pkcs7>(&ciphertext[3..])
+        .decrypt_padded_vec_mut::<Pkcs7>(body)
         .map_err(|_| AuthError::Invalid)
+}
+
+fn oscrypt_passwords(password: &[u8]) -> impl Iterator<Item = &[u8]> {
+    [
+        Some(password),
+        (password != OSCRYPT_V10_PASSWORD).then_some(OSCRYPT_V10_PASSWORD),
+        (password != b"").then_some(b"".as_slice()),
+    ]
+    .into_iter()
+    .flatten()
 }
 
 pub fn email_from_access_token(token: &str) -> Option<String> {
@@ -218,14 +245,13 @@ fn parse_accounts_field(value: &Value) -> Result<AccountsFile, AuthError> {
 }
 
 fn account_token(file: &AccountsFile) -> Result<&str, AuthError> {
-    let by_active = file
-        .active
-        .as_deref()
-        .filter(|id| !id.is_empty())
-        .and_then(|id| file.accounts.get(id));
-    let account = by_active
-        .or_else(|| file.accounts.values().next())
-        .ok_or(AuthError::Missing)?;
+    let account = if let Some(id) = file.active.as_deref().filter(|id| !id.is_empty()) {
+        file.accounts.get(id).ok_or(AuthError::Missing)?
+    } else if file.accounts.len() == 1 {
+        file.accounts.values().next().ok_or(AuthError::Missing)?
+    } else {
+        return Err(AuthError::Missing);
+    };
     account
         .access_token
         .as_deref()
@@ -270,12 +296,29 @@ pub async fn load_bearer() -> Result<CursorBearer, AuthError> {
 
 pub async fn load_bearer_from_path(path: &Path) -> Result<CursorBearer, AuthError> {
     let raw = std::fs::read_to_string(path).map_err(|_| AuthError::Missing)?;
+    let v10_err = match first_matching_bearer(&raw, [OSCRYPT_V10_PASSWORD, b"".as_slice()]) {
+        Ok(bearer) => return Ok(bearer),
+        Err(err @ (AuthError::Expired | AuthError::Missing)) => return Err(err),
+        Err(err) => err,
+    };
     let passwords =
         match tokio::time::timeout(std::time::Duration::from_secs(15), keyring_passwords()).await {
-            Ok(result) => result?,
+            Ok(Ok(passwords)) => passwords,
+            Ok(Err(err)) => return Err(err),
             Err(_) => return Err(AuthError::Keyring),
         };
-    first_matching_bearer(&raw, passwords.iter().map(|p| p.as_slice()))
+    bearer_after_keyring(&raw, v10_err, &passwords)
+}
+
+fn bearer_after_keyring(
+    raw: &str,
+    v10_err: AuthError,
+    passwords: &[Zeroizing<Vec<u8>>],
+) -> Result<CursorBearer, AuthError> {
+    if passwords.is_empty() {
+        return Err(v10_err);
+    }
+    first_matching_bearer(raw, passwords.iter().map(|p| p.as_slice()))
 }
 
 pub fn first_matching_bearer(
@@ -325,6 +368,7 @@ async fn secrets_from_search(
     search: secret_service::SearchItemsResult<secret_service::Item<'_>>,
 ) -> Result<Vec<Zeroizing<Vec<u8>>>, AuthError> {
     let mut passwords = Vec::new();
+    let mut unlock_failed = false;
     for item in &search.unlocked {
         if let Ok(secret) = item.get_secret().await
             && !secret.is_empty()
@@ -334,6 +378,7 @@ async fn secrets_from_search(
     }
     for item in &search.locked {
         if item.unlock().await.is_err() {
+            unlock_failed = true;
             continue;
         }
         if let Ok(secret) = item.get_secret().await
@@ -341,6 +386,9 @@ async fn secrets_from_search(
         {
             passwords.push(Zeroizing::new(secret));
         }
+    }
+    if passwords.is_empty() && unlock_failed {
+        return Err(AuthError::Keyring);
     }
     Ok(passwords)
 }
@@ -418,6 +466,48 @@ mod tests {
         let b64 = "djExcgfW6y1Bw9nQ8dVO5kJowJxU9fXFeUmYuhanK7z4yAE=";
         let ct = BASE64.decode(b64.as_bytes()).unwrap();
         assert_eq!(decrypt_oscrypt(&ct, PASSWORD).unwrap(), PLAIN);
+    }
+
+    #[test]
+    fn v10_peanuts_ignores_stale_keyring_password() {
+        let ct = encrypt_oscrypt(PLAIN, OSCRYPT_V10_PASSWORD, b"v10");
+        assert_eq!(
+            decrypt_oscrypt(&ct, b"stale-libsecret-password").unwrap(),
+            PLAIN
+        );
+        assert_eq!(decrypt_oscrypt(&ct, OSCRYPT_V10_PASSWORD).unwrap(), PLAIN);
+    }
+
+    #[test]
+    fn v10_empty_key_fallback() {
+        let ct = encrypt_oscrypt(PLAIN, b"", b"v10");
+        assert_eq!(
+            decrypt_oscrypt(&ct, b"stale-libsecret-password").unwrap(),
+            PLAIN
+        );
+    }
+
+    #[test]
+    fn stale_keyring_still_reads_v10_peanuts_secrets() {
+        let token_plain = sample_token();
+        let mid_plain = "machine-id-uuid";
+        let json = serde_json::json!({
+            "cursor-access-token": BASE64.encode(&encrypt_oscrypt(
+                token_plain.as_bytes(),
+                OSCRYPT_V10_PASSWORD,
+                b"v10",
+            )),
+            "cursor-machine-id": BASE64.encode(&encrypt_oscrypt(
+                mid_plain.as_bytes(),
+                OSCRYPT_V10_PASSWORD,
+                b"v10",
+            )),
+        })
+        .to_string();
+        let bearer =
+            first_matching_bearer(&json, [b"stale-libsecret-password".as_slice()]).unwrap();
+        assert_eq!(bearer.token, token_plain);
+        assert_eq!(bearer.machine_id, mid_plain);
     }
 
     #[test]
@@ -553,5 +643,33 @@ mod tests {
             grok_bot_config_dir_from(Some(PathBuf::from("/tmp/xdg"))),
             PathBuf::from("/tmp/xdg/Grok Bot")
         );
+        assert_eq!(
+            grok_bot_config_dir_from(Some(PathBuf::from(""))),
+            dirs_home().join(".config/Grok Bot")
+        );
+    }
+
+    #[test]
+    fn stale_active_falls_back_to_top_level_token() {
+        let top = sample_token();
+        let json = serde_json::json!({
+            "cursor-access-token": encrypt_field(&top),
+            "cursor-accounts": {
+                "active": "missing-id",
+                "accounts": {}
+            },
+            "cursor-machine-id": encrypt_field("machine-id-uuid"),
+        })
+        .to_string();
+        let bearer = bearer_from_secrets_json(&json, PASSWORD).unwrap();
+        assert_eq!(bearer.token, top);
+    }
+
+    #[test]
+    fn empty_keyring_keeps_v10_error() {
+        assert!(matches!(
+            bearer_after_keyring("not-json", AuthError::Invalid, &[]),
+            Err(AuthError::Invalid)
+        ));
     }
 }

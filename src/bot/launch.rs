@@ -1,8 +1,8 @@
-use crate::spawn::{detach, spawn_detached};
+use crate::spawn::spawn_detached;
+use std::ffi::OsString;
 use std::path::PathBuf;
-use std::process::Command;
 
-const DESKTOP_NAMES: &[&str] = &["sand.desktop", "grok-bot.desktop"];
+const DESKTOP_NAMES: &[&str] = &["grok-bot.desktop", "sand.desktop"];
 const BIN_CANDIDATES: &[&str] = &[
     "/opt/Grok Bot/grok-bot",
     "/opt/Grok Bot/sand",
@@ -25,11 +25,8 @@ pub fn open_grok_bot() -> Result<(), String> {
         }
     }
     if let Some(bin) = find_binary() {
-        let mut cmd = Command::new(bin);
-        return detach(&mut cmd)
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| format!("failed to launch Grok Bot: {e}"));
+        let mut cmd = std::process::Command::new(bin);
+        return crate::spawn::spawn_detached_cmd(&mut cmd, "Grok Bot");
     }
     Err("Grok Bot is not installed".into())
 }
@@ -38,6 +35,7 @@ fn find_desktop() -> Option<PathBuf> {
     find_desktop_in(&application_dirs(
         std::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
         std::env::var_os("HOME").map(PathBuf::from),
+        std::env::var_os("XDG_DATA_DIRS"),
     ))
 }
 
@@ -45,15 +43,29 @@ fn find_binary() -> Option<PathBuf> {
     find_binary_in(BIN_CANDIDATES.iter().map(PathBuf::from).chain(path_bins()))
 }
 
-fn application_dirs(xdg_data_home: Option<PathBuf>, home: Option<PathBuf>) -> Vec<PathBuf> {
+fn application_dirs(
+    xdg_data_home: Option<PathBuf>,
+    home: Option<PathBuf>,
+    xdg_data_dirs: Option<OsString>,
+) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    if let Some(xdg) = xdg_data_home {
+    if let Some(xdg) = xdg_data_home.filter(|p| !p.as_os_str().is_empty()) {
         dirs.push(xdg.join("applications"));
-    } else if let Some(home) = home {
+    } else if let Some(home) = home.filter(|p| !p.as_os_str().is_empty()) {
         dirs.push(home.join(".local/share/applications"));
     }
-    dirs.push(PathBuf::from("/usr/local/share/applications"));
-    dirs.push(PathBuf::from("/usr/share/applications"));
+    let data_dirs = xdg_data_dirs
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| OsString::from("/usr/local/share:/usr/share"));
+    for dir in std::env::split_paths(&data_dirs) {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        let apps = dir.join("applications");
+        if !dirs.contains(&apps) {
+            dirs.push(apps);
+        }
+    }
     dirs
 }
 
@@ -97,13 +109,13 @@ mod tests {
     }
 
     #[test]
-    fn prefers_sand_desktop_over_grok_bot() {
+    fn prefers_grok_bot_desktop_over_sand() {
         let dir = temp_dir("desktop");
         fs::write(dir.join("grok-bot.desktop"), "[Desktop Entry]\n").unwrap();
         fs::write(dir.join("sand.desktop"), "[Desktop Entry]\n").unwrap();
         assert_eq!(
             find_desktop_in(std::slice::from_ref(&dir)).as_deref(),
-            Some(dir.join("sand.desktop").as_path())
+            Some(dir.join("grok-bot.desktop").as_path())
         );
         let _ = fs::remove_dir_all(&dir);
     }
@@ -126,8 +138,27 @@ mod tests {
         let dirs = application_dirs(
             Some(PathBuf::from("/tmp/xdg-data")),
             Some(PathBuf::from("/tmp/home")),
+            None,
         );
         assert_eq!(dirs[0], PathBuf::from("/tmp/xdg-data/applications"));
+        assert!(
+            dirs.iter()
+                .any(|d| d.as_path() == std::path::Path::new("/usr/share/applications"))
+        );
+    }
+
+    #[test]
+    fn application_dirs_empty_xdg_falls_back_and_reads_data_dirs() {
+        let dirs = application_dirs(
+            Some(PathBuf::from("")),
+            Some(PathBuf::from("/tmp/home")),
+            Some(OsString::from("/opt/share:/usr/share")),
+        );
+        assert_eq!(
+            dirs[0],
+            PathBuf::from("/tmp/home/.local/share/applications")
+        );
+        assert_eq!(dirs[1], PathBuf::from("/opt/share/applications"));
         assert!(
             dirs.iter()
                 .any(|d| d.as_path() == std::path::Path::new("/usr/share/applications"))

@@ -76,35 +76,48 @@ fn dirs_home() -> PathBuf {
 pub fn load_bearer() -> Result<Bearer, AuthError> {
     let path = grok_home().join("auth.json");
     let mut raw = fs::read_to_string(&path).map_err(|_| AuthError::Missing)?;
-    let map: HashMap<String, AuthEntry> = match serde_json::from_str(&raw) {
-        Ok(map) => map,
-        Err(_) => {
-            raw.zeroize();
-            return Err(AuthError::Invalid);
-        }
-    };
+    let result = bearer_from_auth_json(&raw);
     raw.zeroize();
+    result
+}
 
-    let mut preferred: Option<AuthEntry> = None;
+fn bearer_from_auth_json(raw: &str) -> Result<Bearer, AuthError> {
+    let map: HashMap<String, AuthEntry> =
+        serde_json::from_str(raw).map_err(|_| AuthError::Invalid)?;
+
+    let mut preferred_fresh: Option<AuthEntry> = None;
+    let mut preferred_stale: Option<AuthEntry> = None;
     let mut fallback: Option<AuthEntry> = None;
     for (key, entry) in map {
+        if entry.key.as_deref().is_none_or(|k| k.is_empty()) {
+            continue;
+        }
         if key.starts_with("https://auth.x.ai::") {
-            preferred = Some(entry);
-        } else if fallback.is_none() && entry.key.is_some() {
+            if entry_expired(&entry) {
+                if preferred_stale.is_none() {
+                    preferred_stale = Some(entry);
+                }
+            } else if preferred_fresh.is_none() {
+                preferred_fresh = Some(entry);
+            }
+        } else if fallback.is_none() {
             fallback = Some(entry);
         }
     }
-    let mut entry = preferred.or(fallback).ok_or(AuthError::Missing)?;
+    let mut entry = match (preferred_fresh, fallback, preferred_stale) {
+        (Some(entry), _, _) => entry,
+        (None, Some(entry), _) if !entry_expired(&entry) => entry,
+        (None, _, Some(entry)) => entry,
+        (None, Some(entry), None) => entry,
+        (None, None, None) => return Err(AuthError::Missing),
+    };
     let mut token = entry
         .key
         .take()
         .filter(|k| !k.is_empty())
         .ok_or(AuthError::Missing)?;
 
-    if let Some(expires) = entry.expires_at.as_deref()
-        && let Ok(when) = DateTime::parse_from_rfc3339(expires)
-        && when.with_timezone(&Utc) <= Utc::now()
-    {
+    if entry_expired(&entry) {
         token.zeroize();
         return Err(AuthError::Expired);
     }
@@ -116,6 +129,14 @@ pub fn load_bearer() -> Result<Bearer, AuthError> {
             principal_type: entry.principal_type.take(),
         },
     })
+}
+
+fn entry_expired(entry: &AuthEntry) -> bool {
+    entry
+        .expires_at
+        .as_deref()
+        .and_then(|expires| DateTime::parse_from_rfc3339(expires).ok())
+        .is_some_and(|when| when.with_timezone(&Utc) <= Utc::now())
 }
 
 #[cfg(test)]
@@ -133,5 +154,48 @@ mod tests {
             dirs_home().join(".grok")
         );
         assert_eq!(grok_home_from(None), dirs_home().join(".grok"));
+    }
+
+    #[test]
+    fn prefers_unexpired_xai_token() {
+        let json = r#"{
+            "https://auth.x.ai::stale": {"key":"stale-token","expires_at":"2000-01-01T00:00:00Z","email":"old@x.ai"},
+            "https://auth.x.ai::fresh": {"key":"fresh-token","expires_at":"2099-01-01T00:00:00Z","email":"new@x.ai"},
+            "https://other.example::": {"key":"other-token","expires_at":"2099-01-01T00:00:00Z"}
+        }"#;
+        let bearer = bearer_from_auth_json(json).unwrap();
+        assert_eq!(bearer.token, "fresh-token");
+        assert_eq!(bearer.identity.email.as_deref(), Some("new@x.ai"));
+    }
+
+    #[test]
+    fn skips_empty_xai_key() {
+        let json = r#"{
+            "https://auth.x.ai::empty": {"key":"","expires_at":"2099-01-01T00:00:00Z"},
+            "https://cli.example::": {"key":"fallback-token","expires_at":"2099-01-01T00:00:00Z","email":"cli@x.ai"}
+        }"#;
+        let bearer = bearer_from_auth_json(json).unwrap();
+        assert_eq!(bearer.token, "fallback-token");
+    }
+
+    #[test]
+    fn expired_xai_does_not_shadow_live_fallback() {
+        let json = r#"{
+            "https://auth.x.ai::stale": {"key":"stale-token","expires_at":"2000-01-01T00:00:00Z"},
+            "https://cli.example::": {"key":"fallback-token","expires_at":"2099-01-01T00:00:00Z"}
+        }"#;
+        let bearer = bearer_from_auth_json(json).unwrap();
+        assert_eq!(bearer.token, "fallback-token");
+    }
+
+    #[test]
+    fn sole_expired_xai_is_expired() {
+        let json = r#"{
+            "https://auth.x.ai::stale": {"key":"stale-token","expires_at":"2000-01-01T00:00:00Z"}
+        }"#;
+        assert!(matches!(
+            bearer_from_auth_json(json),
+            Err(AuthError::Expired)
+        ));
     }
 }

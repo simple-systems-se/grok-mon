@@ -17,8 +17,15 @@ pub fn detach(cmd: &mut Command) -> &mut Command {
 pub fn spawn_detached(program: &str, args: &[&str]) -> Result<(), String> {
     let mut cmd = Command::new(program);
     cmd.args(args);
-    detach(&mut cmd)
+    spawn_detached_cmd(&mut cmd, program)
+}
+
+pub fn spawn_detached_cmd(cmd: &mut Command, name: &str) -> Result<(), String> {
+    let mut child = detach(cmd)
         .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("failed to launch {program}: {e}"))
+        .map_err(|e| format!("failed to launch {name}: {e}"))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }

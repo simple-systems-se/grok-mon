@@ -43,7 +43,8 @@ pub fn credentials_path() -> PathBuf {
 }
 
 fn credentials_path_from(xdg: Option<PathBuf>) -> PathBuf {
-    xdg.unwrap_or_else(|| dirs_home().join(".config"))
+    xdg.filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| dirs_home().join(".config"))
         .join("grok-mon-api")
         .join("credentials.json")
 }
@@ -249,6 +250,10 @@ mod tests {
         assert_eq!(
             credentials_path_from(Some(PathBuf::from("/tmp/xdg"))),
             PathBuf::from("/tmp/xdg/grok-mon-api/credentials.json")
+        );
+        assert_eq!(
+            credentials_path_from(Some(PathBuf::from(""))),
+            dirs_home().join(".config/grok-mon-api/credentials.json")
         );
     }
 

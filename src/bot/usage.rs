@@ -261,6 +261,13 @@ async fn post_connect(
 }
 
 pub async fn fetch_bot_usage() -> Result<BotSnapshot, FetchError> {
+    match tokio::time::timeout(std::time::Duration::from_secs(20), fetch_bot_usage_inner()).await {
+        Ok(result) => result,
+        Err(_) => Err(FetchError::Http("cursor usage timed out".into())),
+    }
+}
+
+async fn fetch_bot_usage_inner() -> Result<BotSnapshot, FetchError> {
     let bearer = load_bearer().await.map_err(FetchError::Auth)?;
     let client = http_client()?;
     let version = super::secrets::client_version_from_marker(
@@ -287,6 +294,7 @@ pub async fn fetch_bot_usage() -> Result<BotSnapshot, FetchError> {
     };
     let mut snapshot = parse_usage_json(&status_body, period_body.as_deref())?;
     snapshot.email = bearer.email.clone();
+    tracing::info!(percent = snapshot.percent, "fetched Grok Bot usage");
     Ok(snapshot)
 }
 

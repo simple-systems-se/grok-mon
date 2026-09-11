@@ -40,6 +40,7 @@ pub struct GrokBotMonitor {
     size: Size,
     open_error: Option<String>,
     fetching: bool,
+    fetch_started: Option<std::time::Instant>,
 }
 
 impl Default for GrokBotMonitor {
@@ -57,6 +58,7 @@ impl Default for GrokBotMonitor {
             size: Size::new(10.0, 10.0),
             open_error: None,
             fetching: false,
+            fetch_started: None,
         }
     }
 }
@@ -64,6 +66,7 @@ impl Default for GrokBotMonitor {
 #[derive(Debug, Clone)]
 pub enum Message {
     Tick,
+    Clock,
     TogglePopup,
     PopupClosed(Id),
     Size(Size),
@@ -122,7 +125,7 @@ impl cosmic::Application for GrokBotMonitor {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([
+        let mut subs = vec![
             listen_with(|event, _status, id| {
                 if let cosmic::iced::Event::Window(
                     cosmic::iced::window::Event::Resized(size)
@@ -139,7 +142,14 @@ impl cosmic::Application for GrokBotMonitor {
             self.core
                 .watch_config::<Config>(Self::APP_ID)
                 .map(|update| Message::ConfigChanged(update.config)),
-        ])
+        ];
+        if self.popup.is_some() {
+            subs.push(
+                cosmic::iced::time::every(std::time::Duration::from_secs(1))
+                    .map(|_| Message::Clock),
+            );
+        }
+        Subscription::batch(subs)
     }
 
     fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
@@ -147,15 +157,26 @@ impl cosmic::Application for GrokBotMonitor {
             Message::Tick => {
                 self.live = live_roster();
                 if self.fetching {
-                    return Task::none();
+                    if self
+                        .fetch_started
+                        .is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(30))
+                    {
+                        tracing::warn!("bot usage fetch still running after 30s; retrying");
+                        self.fetching = false;
+                    } else {
+                        return Task::none();
+                    }
                 }
                 self.fetching = true;
+                self.fetch_started = Some(std::time::Instant::now());
                 return Task::perform(fetch_bot_usage(), |result| {
                     cosmic::action::Action::App(Message::UsageFetched(result))
                 });
             }
+            Message::Clock => {}
             Message::UsageFetched(result) => {
                 self.fetching = false;
+                self.fetch_started = None;
                 match result {
                     Ok(snapshot) => {
                         self.error = None;

@@ -89,18 +89,21 @@ pub fn parse_snapshot(
         .map(parse_preview)
         .unwrap_or((None, None));
 
-    let remaining_cents = if let Some(remaining) = preview_remaining {
-        remaining
-    } else {
-        match balance {
-            Some(bytes) => parse_balance(bytes)?,
-            None => {
-                return Err(FetchError::Parse(
-                    "no prepaid remaining in billing response".into(),
-                ));
+    let posted = match balance {
+        Some(bytes) => match parse_balance(bytes) {
+            Ok(v) => Some(v),
+            Err(err) => {
+                if preview_remaining.is_none() && preview_used.is_none() {
+                    return Err(err);
+                }
+                tracing::debug!("prepaid balance parse skipped: {err}");
+                None
             }
-        }
+        },
+        None => None,
     };
+
+    let remaining_cents = live_remaining_cents(posted, preview_remaining, preview_used)?;
 
     let tokens = keys.and_then(|bytes| {
         serde_json::from_slice::<Value>(bytes)
@@ -146,6 +149,25 @@ fn parse_balance(bytes: &[u8]) -> Result<i64, FetchError> {
     Ok(remaining_cents_from_ledger(val))
 }
 
+/// Live remaining is posted prepaid ledger minus current-period spend.
+///
+/// `prepaidCredits` on the invoice preview can lag behind live spend. The
+/// posted ledger does not deduct mid-cycle either, so remaining is
+/// `posted - used` when both are present. Preview remaining is only a
+/// fallback when the ledger is missing.
+pub fn live_remaining_cents(
+    posted: Option<i64>,
+    preview_remaining: Option<i64>,
+    used: Option<i64>,
+) -> Result<i64, FetchError> {
+    match (posted, used) {
+        (Some(posted), Some(used)) => Ok(posted - used),
+        (Some(posted), None) => Ok(preview_remaining.unwrap_or(posted)),
+        (None, _) => preview_remaining
+            .ok_or_else(|| FetchError::Parse("no prepaid remaining in billing response".into())),
+    }
+}
+
 fn parse_preview(preview: &Value) -> (Option<i64>, Option<i64>) {
     let invoice = preview
         .get("coreInvoice")
@@ -158,12 +180,35 @@ fn parse_preview(preview: &Value) -> (Option<i64>, Option<i64>) {
         .or_else(|| invoice.get("prepaid_credits"))
         .and_then(parse_cent)
         .map(remaining_cents_from_ledger);
-    let used = invoice
+    (remaining, preview_spend(invoice))
+}
+
+fn preview_spend(invoice: &Value) -> Option<i64> {
+    let used_field = invoice
         .get("prepaidCreditsUsed")
         .or_else(|| invoice.get("prepaid_credits_used"))
         .and_then(parse_cent)
-        .map(|v| v.abs());
-    (remaining, used)
+        .map(i64::saturating_abs);
+    let total = invoice
+        .get("totalWithCorr")
+        .or_else(|| invoice.get("total_with_corr"))
+        .and_then(parse_cent)
+        .map(i64::saturating_abs);
+    let lines = line_spend(invoice);
+    [used_field, total, lines].into_iter().flatten().max()
+}
+
+fn line_spend(invoice: &Value) -> Option<i64> {
+    let lines = invoice.get("lines")?.as_array()?;
+    let mut sum = 0i64;
+    let mut any = false;
+    for line in lines {
+        if let Some(amount) = line.get("amount").and_then(parse_cent) {
+            sum = sum.saturating_add(amount.saturating_abs());
+            any = true;
+        }
+    }
+    any.then_some(sum)
 }
 
 fn parse_keys(value: &Value) -> Vec<ApiToken> {
@@ -198,6 +243,7 @@ fn parse_keys(value: &Value) -> Vec<ApiToken> {
 
 fn parse_cent(value: &Value) -> Option<i64> {
     match value {
+        // Protobuf JSON omits default fields; `{"total":{}}` is 0 cents.
         Value::Object(map) => map.get("val").map_or(Some(0), parse_cent),
         Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f.round() as i64)),
         Value::String(s) => s.parse().ok(),
@@ -275,7 +321,15 @@ async fn get_json(
 
 pub async fn fetch_api_usage() -> Result<ApiSnapshot, FetchError> {
     let creds = load_credentials().map_err(FetchError::Auth)?;
-    fetch_with_credentials(&creds).await
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        fetch_with_credentials(&creds),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(FetchError::Http("management API timed out".into())),
+    }
 }
 
 async fn fetch_with_credentials(creds: &Credentials) -> Result<ApiSnapshot, FetchError> {
@@ -288,24 +342,14 @@ async fn fetch_with_credentials(creds: &Credentials) -> Result<ApiSnapshot, Fetc
         creds.team_id.as_deref(),
     )?;
 
-    let balance = get_json(
-        &client,
-        headers.clone(),
-        &format!("/v1/billing/teams/{team_id}/prepaid/balance"),
-    )
-    .await;
-    let preview = get_json(
-        &client,
-        headers.clone(),
-        &format!("/v1/billing/teams/{team_id}/postpaid/invoice/preview"),
-    )
-    .await;
-    let keys = get_json(
-        &client,
-        headers,
-        &format!("/auth/teams/{team_id}/api-keys?activeOnly=true"),
-    )
-    .await;
+    let balance_path = format!("/v1/billing/teams/{team_id}/prepaid/balance");
+    let preview_path = format!("/v1/billing/teams/{team_id}/postpaid/invoice/preview");
+    let keys_path = format!("/auth/teams/{team_id}/api-keys?activeOnly=true");
+    let (balance, preview, keys) = tokio::join!(
+        get_json(&client, headers.clone(), &balance_path),
+        get_json(&client, headers.clone(), &preview_path),
+        get_json(&client, headers.clone(), &keys_path),
+    );
 
     let (balance_bytes, preview_bytes) = merge_billing_bodies(balance, preview)?;
     let keys_bytes = match keys {
@@ -316,13 +360,19 @@ async fn fetch_with_credentials(creds: &Credentials) -> Result<ApiSnapshot, Fetc
         }
     };
 
-    parse_snapshot(
+    let snapshot = parse_snapshot(
         &validation,
         balance_bytes.as_deref(),
         preview_bytes.as_deref(),
         keys_bytes.as_deref(),
         creds.team_id.as_deref(),
-    )
+    )?;
+    tracing::info!(
+        remaining_cents = snapshot.remaining_cents,
+        used_cents = snapshot.used_cents,
+        "fetched xAI API usage"
+    );
+    Ok(snapshot)
 }
 
 type BillingBodies = (Option<Vec<u8>>, Option<Vec<u8>>);
@@ -378,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_prefers_preview_remaining() {
+    fn parse_live_remaining_is_posted_minus_used() {
         let validation = include_bytes!("../../tests/fixtures/api_validation.json");
         let balance = include_bytes!("../../tests/fixtures/api_balance.json");
         let preview = include_bytes!("../../tests/fixtures/api_preview.json");
@@ -393,6 +443,44 @@ mod tests {
         assert_eq!(tokens.len(), 2);
         assert_eq!(tokens[0].name, "prod");
         assert!(tokens[1].disabled);
+    }
+
+    #[test]
+    fn lagging_prepaid_credits_uses_posted_minus_spend() {
+        let validation = include_bytes!("../../tests/fixtures/api_validation.json");
+        let balance = include_bytes!("../../tests/fixtures/api_balance_posted.json");
+        let preview = include_bytes!("../../tests/fixtures/api_preview_lagging.json");
+        let snap = parse_snapshot(validation, Some(balance), Some(preview), None, None).unwrap();
+        // Posted $100, invoice spend $2.20. prepaidCredits only moved $0.36.
+        assert_eq!(snap.remaining_cents, 9780);
+        assert_eq!(snap.used_cents, Some(220));
+        assert_eq!(format_usd(snap.remaining_cents), "$97.80");
+    }
+
+    #[test]
+    fn live_remaining_prefers_posted_minus_used() {
+        assert_eq!(
+            live_remaining_cents(Some(10_000), Some(9964), Some(220)).unwrap(),
+            9780
+        );
+        assert_eq!(
+            live_remaining_cents(Some(1234), Some(890), Some(344)).unwrap(),
+            890
+        );
+        assert_eq!(
+            live_remaining_cents(None, Some(890), Some(344)).unwrap(),
+            890
+        );
+        assert_eq!(live_remaining_cents(Some(1234), None, None).unwrap(), 1234);
+        assert!(live_remaining_cents(None, None, Some(220)).is_err());
+    }
+
+    #[test]
+    fn parse_cent_empty_object_is_zero() {
+        assert_eq!(parse_balance(br#"{"total":{}}"#).unwrap(), 0);
+        assert!(parse_balance(br#"{}"#).is_err());
+        assert_eq!(parse_cent(&serde_json::json!({"val":"-220"})), Some(-220));
+        assert_eq!(parse_cent(&serde_json::json!("40")), Some(40));
     }
 
     #[test]

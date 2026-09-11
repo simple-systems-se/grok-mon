@@ -1,0 +1,54 @@
+{
+  "coreInvoice": {
+    "lines": [
+      {
+        "clusterName": "us-east-1",
+        "description": "API grok-imagine-image-2.0",
+        "unitType": "Generated image",
+        "unitPrice": "800000000",
+        "numUnits": "5",
+        "amount": "40",
+        "product": "api"
+      },
+      {
+        "clusterName": "us-west-2",
+        "description": "API grok-4.6",
+        "unitType": "Prompt text tokens",
+        "unitPrice": "20000",
+        "numUnits": "1782",
+        "amount": "0",
+        "product": "api"
+      },
+      {
+        "clusterName": "us-west-2",
+        "description": "API grok-imagine-image-2.0",
+        "unitType": "Generated image",
+        "unitPrice": "800000000",
+        "numUnits": "22",
+        "amount": "176",
+        "product": "api"
+      },
+      {
+        "clusterName": "us-west-2",
+        "description": "API grok-imagine-image-2.0",
+        "unitType": "Generated image",
+        "unitPrice": "400000000",
+        "numUnits": "1",
+        "amount": "4",
+        "product": "api"
+      }
+    ],
+    "amountBeforeVat": "0",
+    "vatCost": "0",
+    "amountAfterVat": "0",
+    "totalWithCorr": { "val": "220" },
+    "prepaidCredits": { "val": "-9964" },
+    "prepaidCreditsUsed": { "val": "-220" }
+  },
+  "effectiveSpendingLimit": "0",
+  "defaultCredits": "0",
+  "billingCycle": {
+    "year": 2026,
+    "month": 9
+  }
+}

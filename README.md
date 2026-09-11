@@ -186,11 +186,14 @@ validation). Organization-scoped keys need `team_id` or `XAI_TEAM_ID`.
 Environment variables `XAI_MANAGEMENT_API_KEY` (or `XAI_MANAGEMENT_KEY`) and
 `XAI_TEAM_ID` override the file when the panel process has them.
 
-The applet prefers live remaining from the invoice preview
-(`/v1/billing/teams/{team}/postpaid/invoice/preview`) and falls back to the
-posted prepaid ledger (`/v1/billing/teams/{team}/prepaid/balance`). Ledger
-amounts are inverted USD cents (`"-1000"` is $10 remaining). The applet never
-treats a missing total as $0.00.
+The applet computes live remaining as the posted prepaid ledger
+(`/v1/billing/teams/{team}/prepaid/balance`) minus current-period spend from
+the invoice preview (`/v1/billing/teams/{team}/postpaid/invoice/preview`).
+Spend is the largest of `prepaidCreditsUsed`, `totalWithCorr`, and invoice
+line amounts. The preview's `prepaidCredits` field can lag mid-cycle, so it
+is only used when the ledger is missing. Ledger amounts are inverted USD
+cents (`"-1000"` is $10 remaining). The applet never treats a missing total
+as $0.00.
 
 If you see `—`, the Management API key is missing or rejected. Inference keys
 (`XAI_API_KEY`) are not accepted.

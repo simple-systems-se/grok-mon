@@ -196,6 +196,13 @@ fn auth_headers(token: &str) -> Result<reqwest::header::HeaderMap, FetchError> {
 }
 
 pub async fn fetch_usage() -> Result<UsageSnapshot, FetchError> {
+    match tokio::time::timeout(std::time::Duration::from_secs(20), fetch_usage_inner()).await {
+        Ok(result) => result,
+        Err(_) => Err(FetchError::Http("billing timed out".into())),
+    }
+}
+
+async fn fetch_usage_inner() -> Result<UsageSnapshot, FetchError> {
     let bearer = load_bearer().map_err(FetchError::Auth)?;
     let client = http_client()?;
     let headers = auth_headers(&bearer.token)?;
@@ -228,6 +235,7 @@ pub async fn fetch_usage() -> Result<UsageSnapshot, FetchError> {
         snapshot.plan = plan;
     }
 
+    tracing::info!(percent = snapshot.percent, "fetched Grok Build usage");
     Ok(snapshot)
 }
 

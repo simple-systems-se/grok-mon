@@ -1,6 +1,9 @@
-use super::secrets::{AuthError, load_bearer};
+use super::secrets::{AuthError, load_accounts};
+use crate::chip::display_identity;
 use chrono::{DateTime, Utc};
+use futures_util::future::join_all;
 use serde_json::Value;
+use zeroize::Zeroize;
 
 const BACKEND_URL: &str = "https://api2.cursor.sh";
 const USAGE_PATH: &str = "/aiserver.v1.DashboardService/GetSandUsageStatus";
@@ -10,6 +13,7 @@ const NO_LIMIT_SENTINEL_CENTS: f64 = 2_147_483_647.0;
 
 #[derive(Debug, Clone)]
 pub struct BotSnapshot {
+    pub account_id: String,
     pub percent: f32,
     pub enterprise: bool,
     pub used_cents: Option<f64>,
@@ -19,6 +23,13 @@ pub struct BotSnapshot {
     pub email: Option<String>,
     pub trial_expires_at: Option<DateTime<Utc>>,
     pub fetched_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BotAccountFetch {
+    pub id: String,
+    pub identity: Option<String>,
+    pub result: Result<BotSnapshot, FetchError>,
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +99,7 @@ pub fn parse_usage_json(
         .map(str::to_string);
 
     Ok(BotSnapshot {
+        account_id: String::new(),
         percent,
         enterprise,
         used_cents,
@@ -260,28 +272,82 @@ async fn post_connect(
     Ok(body.to_vec())
 }
 
-pub async fn fetch_bot_usage() -> Result<BotSnapshot, FetchError> {
-    match tokio::time::timeout(std::time::Duration::from_secs(20), fetch_bot_usage_inner()).await {
-        Ok(result) => result,
-        Err(_) => Err(FetchError::Http("cursor usage timed out".into())),
-    }
-}
-
-async fn fetch_bot_usage_inner() -> Result<BotSnapshot, FetchError> {
-    let bearer = load_bearer().await.map_err(FetchError::Auth)?;
+pub async fn fetch_all_bot_usage() -> Result<Vec<BotAccountFetch>, FetchError> {
+    let accounts = load_accounts().await.map_err(FetchError::Auth)?;
     let client = http_client()?;
     let version = super::secrets::client_version_from_marker(
         &super::secrets::grok_bot_config_dir().join("sand-session-marker.json"),
     );
+    let jobs: Vec<_> = accounts
+        .iter()
+        .map(|account| {
+            (
+                account.id.clone(),
+                account.identity.email.clone(),
+                account.identity.name.clone(),
+                account.token.clone(),
+                account.machine_id.clone(),
+                account.error.clone(),
+            )
+        })
+        .collect();
+    let fetches = jobs
+        .into_iter()
+        .map(|(id, email, name, token, machine_id, error)| {
+            let client = client.clone();
+            let version = version.clone();
+            async move {
+                let identity = display_identity(email.as_deref(), name.as_deref());
+                let result = match token {
+                    Some(mut token) => {
+                        let fetched = tokio::time::timeout(
+                            std::time::Duration::from_secs(20),
+                            fetch_bot_account(&client, &token, &machine_id, &version),
+                        )
+                        .await
+                        .unwrap_or_else(|_| Err(FetchError::Http("cursor usage timed out".into())));
+                        token.zeroize();
+                        fetched
+                    }
+                    None => Err(FetchError::Auth(error.unwrap_or(AuthError::Expired))),
+                };
+                let result = result.map(|mut snapshot| {
+                    snapshot.account_id = id.clone();
+                    if snapshot.email.is_none() {
+                        snapshot.email = email.clone();
+                    }
+                    tracing::info!(
+                        account = %id,
+                        percent = snapshot.percent,
+                        "fetched Grok Bot usage"
+                    );
+                    snapshot
+                });
+                BotAccountFetch {
+                    id,
+                    identity,
+                    result,
+                }
+            }
+        });
+    Ok(join_all(fetches).await)
+}
+
+async fn fetch_bot_account(
+    client: &reqwest::Client,
+    token: &str,
+    machine_id: &str,
+    version: &str,
+) -> Result<BotSnapshot, FetchError> {
     let status_body = post_connect(
-        &client,
-        connect_headers(&bearer.token, &bearer.machine_id, &version)?,
+        client,
+        connect_headers(token, machine_id, version)?,
         USAGE_PATH,
     )
     .await?;
     let period_body = match post_connect(
-        &client,
-        connect_headers(&bearer.token, &bearer.machine_id, &version)?,
+        client,
+        connect_headers(token, machine_id, version)?,
         PERIOD_PATH,
     )
     .await
@@ -292,10 +358,7 @@ async fn fetch_bot_usage_inner() -> Result<BotSnapshot, FetchError> {
             None
         }
     };
-    let mut snapshot = parse_usage_json(&status_body, period_body.as_deref())?;
-    snapshot.email = bearer.email.clone();
-    tracing::info!(percent = snapshot.percent, "fetched Grok Bot usage");
-    Ok(snapshot)
+    parse_usage_json(&status_body, period_body.as_deref())
 }
 
 #[cfg(test)]

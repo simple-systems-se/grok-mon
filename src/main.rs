@@ -3,6 +3,7 @@ mod app;
 mod auth;
 mod billing;
 mod bot;
+mod chip;
 mod config;
 mod ring;
 mod sessions;

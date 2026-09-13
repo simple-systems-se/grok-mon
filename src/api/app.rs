@@ -1,16 +1,16 @@
 use super::auth::credentials_path;
 use super::usage::{ApiSnapshot, ApiToken, FetchError, fetch_api_usage, format_usd};
-use crate::config::{API_APP_ID, CONSOLE_URL, Config};
+use crate::chip::{self, PanelChip, panel_chip, usage_bar};
+use crate::config::{API_APP_ID, CONSOLE_URL, Config, DEFAULT_ACCOUNT_ID};
 use crate::ring::{RingIcon, usage_color, usage_ring};
 use chrono::Utc;
 use cosmic::app::Core;
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
-use cosmic::iced::alignment::{Horizontal, Vertical};
 use cosmic::iced::event::listen_with;
 use cosmic::iced::platform_specific::shell::commands::popup::{destroy_popup, get_popup};
 use cosmic::iced::window::Id;
 use cosmic::iced::{Color, Length, Limits, Size, Subscription};
-use cosmic::widget::{self, button, column, container, divider, row, settings, space, text};
+use cosmic::widget::{self, button, column, container, divider, row, settings, text};
 use cosmic::{Element, Task, theme};
 use std::collections::VecDeque;
 use std::sync::LazyLock;
@@ -74,6 +74,7 @@ pub enum Message {
     SetPoll(u64),
     ToggleSparkline(bool),
     TogglePercent(bool),
+    SetLabel(String),
     ConfigChanged(Config),
 }
 
@@ -214,7 +215,7 @@ impl cosmic::Application for GrokApiMonitor {
                         .min_width(320.0)
                         .max_width(380.0)
                         .min_height(200.0)
-                        .max_height(520.0);
+                        .max_height(560.0);
                     get_popup(popup_settings)
                 };
             }
@@ -260,6 +261,11 @@ impl cosmic::Application for GrokApiMonitor {
                 self.config.show_percent = value;
                 self.save_config();
             }
+            Message::SetLabel(value) => {
+                self.config
+                    .set_account_label(DEFAULT_ACCOUNT_ID.into(), value);
+                self.save_config();
+            }
             Message::ConfigChanged(config) => {
                 self.config = config;
             }
@@ -269,40 +275,33 @@ impl cosmic::Application for GrokApiMonitor {
 
     fn view(&self) -> Element<'_, Self::Message> {
         let (label, color) = self.chip_label();
-        let ring = self.usage_badge(color);
-        let amount = self
-            .core
-            .applet
-            .text(label)
-            .class(theme::Text::Color(color));
-
-        let mut children: Vec<Element<'_, Message>> = vec![ring];
-        if self.config.show_percent || self.snapshot.is_none() {
-            children.push(amount.into());
-        }
-        if self.config.show_sparkline && !self.history.is_empty() {
-            children.push(self.sparkline());
-        }
-
-        let data = if self.core.applet.is_horizontal() {
-            Element::from(
-                row::with_children(children)
-                    .align_y(Vertical::Center)
-                    .spacing(4),
-            )
-        } else {
-            Element::from(
-                column::with_children(children)
-                    .align_x(Horizontal::Center)
-                    .spacing(4),
-            )
-        };
-
-        let button = button::custom(data)
-            .class(theme::Button::AppletIcon)
-            .on_press_down(Message::TogglePopup);
-
-        widget::autosize::autosize(button, PANEL_ID.clone()).into()
+        let theme = theme::active();
+        let track: Color = theme.cosmic().on_bg_color().into();
+        let percent = self
+            .snapshot
+            .as_ref()
+            .map(ApiSnapshot::remaining_percent)
+            .unwrap_or(0.0);
+        let svg = usage_ring(percent, color, track, RingIcon::Key);
+        let sparkline = (self.config.show_sparkline && !self.history.is_empty())
+            .then(|| chip::sparkline(&self.history));
+        let identity = self.config.chip_identity(
+            DEFAULT_ACCOUNT_ID,
+            self.snapshot.as_ref().map(api_identity).as_deref(),
+        );
+        let chip = panel_chip(
+            &self.core.applet,
+            svg,
+            PanelChip {
+                usage_label: label,
+                color,
+                show_usage: self.config.show_percent || self.snapshot.is_none(),
+                identity,
+                sparkline,
+                on_press: Message::TogglePopup,
+            },
+        );
+        widget::autosize::autosize(chip, PANEL_ID.clone()).into()
     }
 
     fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
@@ -327,29 +326,6 @@ impl GrokApiMonitor {
         }
     }
 
-    fn usage_badge(&self, color: Color) -> Element<'_, Message> {
-        let theme = theme::active();
-        let track: Color = theme.cosmic().on_bg_color().into();
-        let percent = self
-            .snapshot
-            .as_ref()
-            .map(ApiSnapshot::remaining_percent)
-            .unwrap_or(0.0);
-        let svg = usage_ring(percent, color, track, RingIcon::Key);
-        let size = self
-            .core
-            .applet
-            .suggested_size(true)
-            .0
-            .saturating_add(10)
-            .max(24);
-        widget::icon::from_svg_bytes(svg.into_bytes())
-            .symbolic(false)
-            .icon()
-            .size(size)
-            .into()
-    }
-
     fn chip_label(&self) -> (String, Color) {
         let theme = theme::active();
         let cosmic = theme.cosmic();
@@ -365,25 +341,6 @@ impl GrokApiMonitor {
             (None, Some(_)) => ("?".into(), cosmic.warning_color().into()),
             (None, None) => ("…".into(), cosmic.on_bg_color().into()),
         }
-    }
-
-    fn sparkline(&self) -> Element<'_, Message> {
-        let bars: Vec<Element<'_, Message>> = self
-            .history
-            .iter()
-            .map(|p| {
-                let h = (p.clamp(0.0, 100.0) / 100.0 * 14.0).max(1.0);
-                container(space::vertical().height(Length::Fixed(h)))
-                    .width(Length::Fixed(2.0))
-                    .class(theme::Container::Primary)
-                    .into()
-            })
-            .collect();
-        row::with_children(bars)
-            .spacing(1)
-            .align_y(Vertical::Bottom)
-            .height(Length::Fixed(14.0))
-            .into()
     }
 
     fn overview(&self) -> Element<'_, Message> {
@@ -410,7 +367,7 @@ impl GrokApiMonitor {
 
         if let Some(snapshot) = &self.snapshot {
             let remaining = snapshot.remaining_percent();
-            col = col.push(padded(self.gauge(remaining)));
+            col = col.push(padded(usage_bar(remaining, snapshot.used_percent())));
             col = col.push(padded(text::body(format!(
                 "{} remaining",
                 format_usd(snapshot.remaining_cents)
@@ -504,6 +461,8 @@ impl GrokApiMonitor {
             widget::toggler(self.config.show_percent).on_toggle(Message::TogglePercent),
         )));
 
+        col = col.push(padded(self.label_setting()));
+
         col = col.push(padded(text::caption(
             "Color by remaining: green above $25 · yellow $10–25 · orange $5–10 · red under $5. Ring is full at $50 remaining.",
         )));
@@ -516,28 +475,42 @@ impl GrokApiMonitor {
         col.into()
     }
 
-    fn gauge(&self, percent: f32) -> Element<'_, Message> {
-        let filled = (percent.clamp(0.0, 100.0) * 10.0).round() as u16;
-        let rest = 1000u16.saturating_sub(filled).max(1);
-        let filled = filled.max(1);
-        container(
-            row::with_capacity(2)
-                .push(
-                    container(space::horizontal())
-                        .width(Length::FillPortion(filled))
-                        .height(Length::Fixed(8.0))
-                        .class(theme::Container::Primary),
-                )
-                .push(
-                    container(space::horizontal())
-                        .width(Length::FillPortion(rest))
-                        .height(Length::Fixed(8.0))
-                        .class(theme::Container::Background),
-                ),
-        )
-        .width(Length::Fill)
-        .into()
+    fn label_setting(&self) -> Element<'_, Message> {
+        let auto = self
+            .snapshot
+            .as_ref()
+            .map(api_identity)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "API key".into());
+        let value = self
+            .config
+            .account_labels
+            .get(DEFAULT_ACCOUNT_ID)
+            .cloned()
+            .unwrap_or_default();
+        column::with_capacity(3)
+            .push(text::body("Panel label"))
+            .push(
+                widget::text_input(auto.clone(), value)
+                    .on_input(Message::SetLabel)
+                    .width(Length::Fill),
+            )
+            .push(text::caption(format!(
+                "Shown on the panel chip. Empty uses {auto}."
+            )))
+            .spacing(8)
+            .into()
     }
+}
+
+fn api_identity(snapshot: &ApiSnapshot) -> String {
+    snapshot
+        .key_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| team_caption(&snapshot.team_id))
 }
 
 fn team_caption(id: &str) -> String {
@@ -595,6 +568,24 @@ fn padded<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn api_identity_prefers_key_name() {
+        let snap = ApiSnapshot {
+            remaining_cents: 1000,
+            used_cents: None,
+            team_id: "65c1e471-205f-4566-9c5a".into(),
+            key_name: Some("prod-billing".into()),
+            tokens: None,
+            fetched_at: Utc::now(),
+        };
+        assert_eq!(api_identity(&snap), "prod-billing");
+        let snap = ApiSnapshot {
+            key_name: None,
+            ..snap
+        };
+        assert_eq!(api_identity(&snap), "team 65c1e471");
+    }
 
     #[test]
     fn tokens_line_lists_active() {

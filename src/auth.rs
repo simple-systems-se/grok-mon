@@ -45,6 +45,7 @@ impl Drop for AuthEntry {
 }
 
 pub struct Bearer {
+    pub id: String,
     pub token: String,
     pub identity: AuthIdentity,
 }
@@ -73,62 +74,83 @@ fn dirs_home() -> PathBuf {
 }
 
 /// Read the current Grok Build OIDC token. Do not log or persist it.
+#[allow(dead_code)]
 pub fn load_bearer() -> Result<Bearer, AuthError> {
+    let mut bearers = load_bearers()?;
+    bearers.drain(..).next().ok_or(AuthError::Missing)
+}
+
+/// Every unexpired Grok Build token, xAI entries first.
+pub fn load_bearers() -> Result<Vec<Bearer>, AuthError> {
     let path = grok_home().join("auth.json");
     let mut raw = fs::read_to_string(&path).map_err(|_| AuthError::Missing)?;
-    let result = bearer_from_auth_json(&raw);
+    let result = bearers_from_auth_json(&raw);
     raw.zeroize();
     result
 }
 
+#[cfg(test)]
 fn bearer_from_auth_json(raw: &str) -> Result<Bearer, AuthError> {
+    let mut bearers = bearers_from_auth_json(raw)?;
+    bearers.drain(..).next().ok_or(AuthError::Missing)
+}
+
+fn bearers_from_auth_json(raw: &str) -> Result<Vec<Bearer>, AuthError> {
     let map: HashMap<String, AuthEntry> =
         serde_json::from_str(raw).map_err(|_| AuthError::Invalid)?;
 
-    let mut preferred_fresh: Option<AuthEntry> = None;
-    let mut preferred_stale: Option<AuthEntry> = None;
-    let mut fallback: Option<AuthEntry> = None;
-    for (key, entry) in map {
+    let mut xai_fresh = Vec::new();
+    let mut xai_stale = 0usize;
+    let mut fallback_fresh = Vec::new();
+    let mut fallback_stale = 0usize;
+    for (id, mut entry) in map {
         if entry.key.as_deref().is_none_or(|k| k.is_empty()) {
             continue;
         }
-        if key.starts_with("https://auth.x.ai::") {
-            if entry_expired(&entry) {
-                if preferred_stale.is_none() {
-                    preferred_stale = Some(entry);
-                }
-            } else if preferred_fresh.is_none() {
-                preferred_fresh = Some(entry);
+        let expired = entry_expired(&entry);
+        let Some(token) = entry.key.take().filter(|k| !k.is_empty()) else {
+            continue;
+        };
+        let bearer = Bearer {
+            id: id.clone(),
+            token,
+            identity: AuthIdentity {
+                email: entry.email.take(),
+                principal_type: entry.principal_type.take(),
+            },
+        };
+        if id.starts_with("https://auth.x.ai::") {
+            if expired {
+                xai_stale += 1;
+            } else {
+                xai_fresh.push(bearer);
             }
-        } else if fallback.is_none() {
-            fallback = Some(entry);
+        } else if expired {
+            fallback_stale += 1;
+        } else {
+            fallback_fresh.push(bearer);
         }
     }
-    let mut entry = match (preferred_fresh, fallback, preferred_stale) {
-        (Some(entry), _, _) => entry,
-        (None, Some(entry), _) if !entry_expired(&entry) => entry,
-        (None, _, Some(entry)) => entry,
-        (None, Some(entry), None) => entry,
-        (None, None, None) => return Err(AuthError::Missing),
-    };
-    let mut token = entry
-        .key
-        .take()
-        .filter(|k| !k.is_empty())
-        .ok_or(AuthError::Missing)?;
 
-    if entry_expired(&entry) {
-        token.zeroize();
+    let mut chosen = if !xai_fresh.is_empty() {
+        xai_fresh
+    } else if !fallback_fresh.is_empty() {
+        fallback_fresh
+    } else if xai_stale > 0 || fallback_stale > 0 {
         return Err(AuthError::Expired);
-    }
+    } else {
+        return Err(AuthError::Missing);
+    };
+    chosen.sort_by(|a, b| {
+        email_sort_key(&a.identity.email)
+            .cmp(&email_sort_key(&b.identity.email))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    Ok(chosen)
+}
 
-    Ok(Bearer {
-        token,
-        identity: AuthIdentity {
-            email: entry.email.take(),
-            principal_type: entry.principal_type.take(),
-        },
-    })
+fn email_sort_key(email: &Option<String>) -> String {
+    email.as_deref().unwrap_or("").to_ascii_lowercase()
 }
 
 fn entry_expired(entry: &AuthEntry) -> bool {
@@ -197,5 +219,23 @@ mod tests {
             bearer_from_auth_json(json),
             Err(AuthError::Expired)
         ));
+    }
+
+    #[test]
+    fn load_bearers_returns_all_fresh_xai() {
+        let json = r#"{
+            "https://auth.x.ai::b": {"key":"token-b","expires_at":"2099-01-01T00:00:00Z","email":"b@x.ai"},
+            "https://auth.x.ai::a": {"key":"token-a","expires_at":"2099-01-01T00:00:00Z","email":"a@x.ai"},
+            "https://auth.x.ai::stale": {"key":"stale-token","expires_at":"2000-01-01T00:00:00Z","email":"old@x.ai"},
+            "https://cli.example::": {"key":"fallback-token","expires_at":"2099-01-01T00:00:00Z","email":"cli@x.ai"}
+        }"#;
+        let bearers = bearers_from_auth_json(json).unwrap();
+        let emails: Vec<_> = bearers
+            .iter()
+            .map(|b| b.identity.email.as_deref().unwrap())
+            .collect();
+        assert_eq!(emails, ["a@x.ai", "b@x.ai"]);
+        assert_eq!(bearers[0].token, "token-a");
+        assert_eq!(bearers[1].token, "token-b");
     }
 }

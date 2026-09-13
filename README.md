@@ -110,18 +110,20 @@ pkill cosmic-panel
 
 The panel chip shows a circular usage ring (the same shape Minimon uses for
 memory) with a small **hammer** (Build), **robot** (Bot), or **key** (API) in
-the center. By default Build and Bot also show current usage as a whole
-percent; API shows remaining prepaid dollars. Settings can hide the number or
-(for Build and Bot) switch the number and ring fill to percent remaining.
+the center, plus a label (account email, API key / team name, or a custom name
+from Settings). Build and Bot show one chip per signed-in account. By default Build and
+Bot also show current usage as a whole percent; API shows remaining prepaid
+dollars. Settings can hide the number or (for Build and Bot) switch the number
+and ring fill to percent remaining.
 Color follows percent **used**, stepped each whole percent: green 0–50%, yellow
 50–80%, orange 80–90%, red 90%+. For API, that percent used is remaining
 prepaid mapped against a $50 full wallet (green above $25, yellow through $10,
 orange through $5, red under $5).
 
-Click the chip for a popup with:
+Click a chip for a popup with:
 
 - Plan name and account email
-- Usage bar and percent
+- Usage bar (0–100, colored like the ring) and percent
 - Weekly or monthly reset time
 - How long ago usage was fetched
 - Live Grok CLI session count (from `~/.grok/active_sessions.json`)
@@ -144,18 +146,20 @@ On Grok API Monitor, add a Management API key (see below).
 ## Grok Bot Monitor
 
 A second applet, launched as `cosmic-ext-applet-grok-monitor --product=bot`.
-It is independent of Grok Monitor: separate panel chip, settings, and account.
+It is independent of Grok Monitor: separate panel chips, settings, and
+accounts.
 
-The chip shows Grok Bot weekly usage as a whole percent (or `n/a` on an
-enterprise pool). Click for reset time, optional on-demand spend, whether the
+Each signed-in Grok Bot account gets its own chip with that account’s email
+and weekly usage as a whole percent (or `n/a` on an enterprise pool). Click a
+chip for that account’s reset time, optional on-demand spend, whether the
 Grok Bot app is running, and up to three recently active bots.
 
 Auth comes from the Grok Bot desktop app (`~/.config/Grok Bot/sand-secrets.json`).
 Tokens are read-only. Chromium v10 blobs use OSCrypt’s built-in password;
-v11 blobs use the login keyring item `application=Grok Bot`. The applet uses
-the active account in `cursor-accounts` and still accepts the older top-level
-`cursor-access-token` field. If you see `—`, open Grok Bot and sign in, then
-wait for the next poll.
+v11 blobs use the login keyring item `application=Grok Bot`. The applet shows
+every `cursor-accounts` entry (active first) and still accepts the older
+top-level `cursor-access-token` field. If you see `—`, open Grok Bot and sign
+in, then wait for the next poll.
 
 This is not Grok Chat. The Grok CLI billing `productUsage` list has GrokBuild
 and GrokChat; Grok Bot usage is a Cursor Sand ledger.
@@ -208,6 +212,7 @@ Open the popup and choose **Settings**.
 | Sparkline on panel | on / off | off |
 | Percent on panel | on / off | on |
 | Amount on panel (API) | on / off | on |
+| Panel label | text | account email / API key name (per chip) |
 | Panel number | used / remaining | used |
 
 The ring fill matches the panel number (used or remaining). Color is always
@@ -235,11 +240,11 @@ item `application=Grok Bot` (preferring
 typically writes v10 because Chromium does not treat COSMIC as a libsecret
 desktop, so a leftover Safe Storage keyring item is ignored when it no longer
 matches the file. The system may prompt to unlock the keyring for v11; that
-prompt is labeled by Grok Bot, not by this applet. The applet prefers the
-active `cursor-accounts` entry and falls back to a top-level
+prompt is labeled by Grok Bot, not by this applet. The applet reads every
+`cursor-accounts` entry (active first) and falls back to a top-level
 `cursor-access-token` if that older layout is still present. It does not
-refresh tokens. When Grok Bot refreshes them, the next poll picks up the new
-file contents.
+refresh tokens or change which account Grok Bot considers active. When Grok
+Bot refreshes them, the next poll picks up the new file contents.
 
 Bot mode is unofficial. It reuses the local Grok Bot session to call Cursor’s
 private usage endpoints (`api2.cursor.sh` DashboardService). Those APIs are

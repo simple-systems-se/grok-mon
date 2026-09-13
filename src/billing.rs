@@ -1,5 +1,6 @@
-use crate::auth::{AuthError, AuthIdentity, load_bearer};
+use crate::auth::{AuthError, AuthIdentity, Bearer, load_bearers};
 use chrono::{DateTime, Utc};
+use futures_util::future::join_all;
 use serde::Deserialize;
 
 const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
@@ -10,6 +11,7 @@ const USER_AGENT: &str = "cosmic-ext-applet-grok-monitor";
 
 #[derive(Debug, Clone)]
 pub struct UsageSnapshot {
+    pub account_id: String,
     pub percent: f32,
     pub used: Option<f64>,
     pub limit: Option<f64>,
@@ -18,6 +20,13 @@ pub struct UsageSnapshot {
     pub plan: Option<String>,
     pub email: Option<String>,
     pub fetched_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BuildAccountFetch {
+    pub id: String,
+    pub identity: Option<String>,
+    pub result: Result<UsageSnapshot, FetchError>,
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +153,7 @@ pub fn parse_credits_json(bytes: &[u8]) -> Result<UsageSnapshot, FetchError> {
         .filter(|s| !s.is_empty());
 
     Ok(UsageSnapshot {
+        account_id: String::new(),
         percent,
         used,
         limit,
@@ -195,16 +205,48 @@ fn auth_headers(token: &str) -> Result<reqwest::header::HeaderMap, FetchError> {
     Ok(headers)
 }
 
-pub async fn fetch_usage() -> Result<UsageSnapshot, FetchError> {
-    match tokio::time::timeout(std::time::Duration::from_secs(20), fetch_usage_inner()).await {
+pub async fn fetch_all_usage() -> Result<Vec<BuildAccountFetch>, FetchError> {
+    let bearers = load_bearers().map_err(FetchError::Auth)?;
+    let client = http_client()?;
+    let fetches = bearers.into_iter().map(|bearer| {
+        let client = client.clone();
+        async move { fetch_one_account(&client, bearer).await }
+    });
+    Ok(join_all(fetches).await)
+}
+
+async fn fetch_one_account(client: &reqwest::Client, bearer: Bearer) -> BuildAccountFetch {
+    let id = bearer.id.clone();
+    let identity = bearer.identity.email.clone();
+    let result = match tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        fetch_usage_for(client, &bearer),
+    )
+    .await
+    {
         Ok(result) => result,
         Err(_) => Err(FetchError::Http("billing timed out".into())),
+    };
+    let result = result.map(|mut snapshot| {
+        snapshot.account_id = id.clone();
+        tracing::info!(
+            account = %id,
+            percent = snapshot.percent,
+            "fetched Grok Build usage"
+        );
+        snapshot
+    });
+    BuildAccountFetch {
+        id,
+        identity,
+        result,
     }
 }
 
-async fn fetch_usage_inner() -> Result<UsageSnapshot, FetchError> {
-    let bearer = load_bearer().map_err(FetchError::Auth)?;
-    let client = http_client()?;
+async fn fetch_usage_for(
+    client: &reqwest::Client,
+    bearer: &Bearer,
+) -> Result<UsageSnapshot, FetchError> {
     let headers = auth_headers(&bearer.token)?;
 
     let response = client
@@ -229,13 +271,12 @@ async fn fetch_usage_inner() -> Result<UsageSnapshot, FetchError> {
     snapshot.email = bearer.identity.email.clone();
     apply_team_guard(&bearer.identity, &mut snapshot);
 
-    if let Ok(plan) = fetch_plan(&client, headers).await
+    if let Ok(plan) = fetch_plan(client, headers).await
         && snapshot.plan.is_none()
     {
         snapshot.plan = plan;
     }
 
-    tracing::info!(percent = snapshot.percent, "fetched Grok Build usage");
     Ok(snapshot)
 }
 

@@ -43,7 +43,47 @@ impl std::fmt::Display for AuthError {
 pub struct CursorBearer {
     pub token: String,
     pub machine_id: String,
+    #[allow(dead_code)]
     pub email: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Identity {
+    pub email: Option<String>,
+    pub name: Option<String>,
+}
+
+impl Identity {
+    pub fn display(&self) -> Option<&str> {
+        self.email
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                self.name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+            })
+    }
+}
+
+pub struct CursorAccount {
+    pub id: String,
+    pub active: bool,
+    pub identity: Identity,
+    pub token: Option<String>,
+    pub machine_id: String,
+    pub error: Option<AuthError>,
+}
+
+impl Drop for CursorAccount {
+    fn drop(&mut self) {
+        if let Some(ref mut token) = self.token {
+            token.zeroize();
+        }
+        self.machine_id.zeroize();
+    }
 }
 
 impl Drop for CursorBearer {
@@ -141,15 +181,33 @@ fn oscrypt_passwords(password: &[u8]) -> impl Iterator<Item = &[u8]> {
     .flatten()
 }
 
+#[cfg(test)]
 pub fn email_from_access_token(token: &str) -> Option<String> {
-    let payload = token.split('.').nth(1)?;
-    let json = b64url_decode(payload)?;
-    let value: serde_json::Value = serde_json::from_slice(&json).ok()?;
-    value
-        .get("email")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+    identity_from_access_token(token).email
+}
+
+pub fn identity_from_access_token(token: &str) -> Identity {
+    let Some(payload) = token.split('.').nth(1) else {
+        return Identity::default();
+    };
+    let Some(json) = b64url_decode(payload) else {
+        return Identity::default();
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&json) else {
+        return Identity::default();
+    };
+    let claim = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| value.get(*key))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    Identity {
+        email: claim(&["email"]),
+        name: claim(&["name", "preferred_username", "username"]),
+    }
 }
 
 fn b64url_decode(raw: &str) -> Option<Vec<u8>> {
@@ -193,11 +251,11 @@ pub fn bearer_from_secrets_json(raw: &str, password: &[u8]) -> Result<CursorBear
         machine_id.zeroize();
         return Err(AuthError::Invalid);
     }
-    let email = email_from_access_token(&token);
+    let identity = identity_from_access_token(&token);
     Ok(CursorBearer {
         token,
         machine_id,
-        email,
+        email: identity.email,
     })
 }
 
@@ -289,11 +347,13 @@ fn token_expired(token: &str) -> bool {
     exp <= now
 }
 
+#[allow(dead_code)]
 pub async fn load_bearer() -> Result<CursorBearer, AuthError> {
     let path = grok_bot_config_dir().join("sand-secrets.json");
     load_bearer_from_path(&path).await
 }
 
+#[allow(dead_code)]
 pub async fn load_bearer_from_path(path: &Path) -> Result<CursorBearer, AuthError> {
     let raw = std::fs::read_to_string(path).map_err(|_| AuthError::Missing)?;
     let v10_err = match first_matching_bearer(&raw, [OSCRYPT_V10_PASSWORD, b"".as_slice()]) {
@@ -308,6 +368,155 @@ pub async fn load_bearer_from_path(path: &Path) -> Result<CursorBearer, AuthErro
             Err(_) => return Err(AuthError::Keyring),
         };
     bearer_after_keyring(&raw, v10_err, &passwords)
+}
+
+pub async fn load_accounts() -> Result<Vec<CursorAccount>, AuthError> {
+    let path = grok_bot_config_dir().join("sand-secrets.json");
+    load_accounts_from_path(&path).await
+}
+
+pub async fn load_accounts_from_path(path: &Path) -> Result<Vec<CursorAccount>, AuthError> {
+    let raw = std::fs::read_to_string(path).map_err(|_| AuthError::Missing)?;
+    let v10_err = match first_matching_accounts(&raw, [OSCRYPT_V10_PASSWORD, b"".as_slice()]) {
+        Ok(accounts) => return Ok(accounts),
+        Err(err @ AuthError::Missing) => return Err(err),
+        Err(err) => err,
+    };
+    let passwords =
+        match tokio::time::timeout(std::time::Duration::from_secs(15), keyring_passwords()).await {
+            Ok(Ok(passwords)) => passwords,
+            Ok(Err(err)) => return Err(err),
+            Err(_) => return Err(AuthError::Keyring),
+        };
+    accounts_after_keyring(&raw, v10_err, &passwords)
+}
+
+fn accounts_after_keyring(
+    raw: &str,
+    v10_err: AuthError,
+    passwords: &[Zeroizing<Vec<u8>>],
+) -> Result<Vec<CursorAccount>, AuthError> {
+    if passwords.is_empty() {
+        return Err(v10_err);
+    }
+    first_matching_accounts(raw, passwords.iter().map(|p| p.as_slice()))
+}
+
+pub fn first_matching_accounts(
+    raw: &str,
+    passwords: impl IntoIterator<Item = impl AsRef<[u8]>>,
+) -> Result<Vec<CursorAccount>, AuthError> {
+    let mut last_err = AuthError::Keyring;
+    let mut tried = false;
+    for password in passwords {
+        tried = true;
+        match accounts_from_secrets_json(raw, password.as_ref()) {
+            Ok(accounts) => return Ok(accounts),
+            Err(err @ AuthError::Missing) => return Err(err),
+            Err(err) => last_err = err,
+        }
+    }
+    if tried {
+        Err(last_err)
+    } else {
+        Err(AuthError::Keyring)
+    }
+}
+
+pub fn accounts_from_secrets_json(
+    raw: &str,
+    password: &[u8],
+) -> Result<Vec<CursorAccount>, AuthError> {
+    let map: HashMap<String, Value> = serde_json::from_str(raw).map_err(|_| AuthError::Invalid)?;
+    let mut machine_id = decrypt_stored(
+        json_str(&map, "cursor-machine-id").ok_or(AuthError::Missing)?,
+        password,
+    )?;
+    if machine_id.is_empty() {
+        machine_id.zeroize();
+        return Err(AuthError::Invalid);
+    }
+
+    let mut accounts = Vec::new();
+    let mut nested_err = None;
+    if let Some(value) = map.get("cursor-accounts") {
+        match parse_accounts_field(value) {
+            Ok(file) => {
+                let active = file.active.clone();
+                for (id, secrets) in file.accounts {
+                    let Some(stored) = secrets.access_token.as_deref().filter(|s| !s.is_empty())
+                    else {
+                        continue;
+                    };
+                    match account_from_stored(&id, &active, stored, password, &machine_id) {
+                        Ok(account) => accounts.push(account),
+                        Err(err) => nested_err = Some(err),
+                    }
+                }
+            }
+            Err(err) => nested_err = Some(err),
+        }
+    }
+
+    if accounts.is_empty()
+        && let Some(stored) = json_str(&map, "cursor-access-token")
+        && let Ok(account) = account_from_stored(
+            "default",
+            &Some("default".into()),
+            stored,
+            password,
+            &machine_id,
+        )
+    {
+        accounts.push(account);
+    }
+
+    machine_id.zeroize();
+    if accounts.is_empty() {
+        return Err(nested_err.unwrap_or(AuthError::Missing));
+    }
+    sort_accounts(&mut accounts);
+    Ok(accounts)
+}
+
+fn account_from_stored(
+    id: &str,
+    active: &Option<String>,
+    stored: &str,
+    password: &[u8],
+    machine_id: &str,
+) -> Result<CursorAccount, AuthError> {
+    let mut token = decrypt_stored(stored, password)?;
+    if token.is_empty() {
+        token.zeroize();
+        return Err(AuthError::Missing);
+    }
+    let identity = identity_from_access_token(&token);
+    let expired = token_expired(&token);
+    if expired {
+        token.zeroize();
+    }
+    Ok(CursorAccount {
+        id: id.to_string(),
+        active: active.as_deref() == Some(id),
+        identity,
+        token: if expired { None } else { Some(token) },
+        machine_id: machine_id.to_string(),
+        error: expired.then_some(AuthError::Expired),
+    })
+}
+
+fn sort_accounts(accounts: &mut [CursorAccount]) {
+    accounts.sort_by(|a, b| match (a.active, b.active) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a
+            .identity
+            .display()
+            .map(str::to_ascii_lowercase)
+            .cmp(&b.identity.display().map(str::to_ascii_lowercase))
+            .then_with(|| a.id.cmp(&b.id)),
+    });
 }
 
 fn bearer_after_keyring(
@@ -521,6 +730,28 @@ mod tests {
     }
 
     #[test]
+    fn identity_from_jwt_prefers_email() {
+        let payload = BASE64.encode(
+            br#"{"email":"bot@example.com","name":"Bot","preferred_username":"botty","exp":4102444800}"#,
+        );
+        let token = format!("eyJhbGciOiJI.{payload}.sig");
+        let identity = identity_from_access_token(&token);
+        assert_eq!(identity.email.as_deref(), Some("bot@example.com"));
+        assert_eq!(identity.name.as_deref(), Some("Bot"));
+        assert_eq!(identity.display(), Some("bot@example.com"));
+    }
+
+    #[test]
+    fn identity_from_jwt_uses_name_without_email() {
+        let payload = BASE64.encode(br#"{"preferred_username":"botty","exp":4102444800}"#);
+        let token = format!("eyJhbGciOiJI.{payload}.sig");
+        let identity = identity_from_access_token(&token);
+        assert_eq!(identity.email, None);
+        assert_eq!(identity.name.as_deref(), Some("botty"));
+        assert_eq!(identity.display(), Some("botty"));
+    }
+
+    #[test]
     fn first_matching_stops_on_expired_decrypt() {
         let payload = BASE64.encode(br#"{"email":"bot@example.com","exp":1}"#);
         let token_plain = format!("eyJhbGciOiJI.{payload}.sig");
@@ -635,6 +866,91 @@ mod tests {
         let bearer = bearer_from_secrets_json(&json, PASSWORD).unwrap();
         assert_eq!(bearer.token, nested);
         assert_eq!(bearer.email.as_deref(), Some("other@example.com"));
+    }
+
+    fn jwt(email: &str, exp: i64) -> String {
+        let payload = BASE64.encode(format!(r#"{{"email":"{email}","exp":{exp}}}"#).as_bytes());
+        format!("eyJhbGciOiJI.{payload}.sig")
+    }
+
+    #[test]
+    fn load_accounts_returns_all_nested_and_active_first() {
+        let active_id = SCOPE;
+        let other_id = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        let active_tok = jwt("active@example.com", 4_102_444_800);
+        let other_tok = jwt("other@example.com", 4_102_444_800);
+        let json = serde_json::json!({
+            "cursor-accounts": {
+                "active": active_id,
+                "accounts": {
+                    other_id: { "cursor-access-token": encrypt_field(&other_tok) },
+                    active_id: { "cursor-access-token": encrypt_field(&active_tok) },
+                }
+            },
+            "cursor-machine-id": encrypt_field("machine-id-uuid"),
+        })
+        .to_string();
+        let accounts = accounts_from_secrets_json(&json, PASSWORD).unwrap();
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0].id, active_id);
+        assert!(accounts[0].active);
+        assert_eq!(
+            accounts[0].identity.email.as_deref(),
+            Some("active@example.com")
+        );
+        assert_eq!(accounts[0].token.as_deref(), Some(active_tok.as_str()));
+        assert_eq!(accounts[1].id, other_id);
+        assert!(!accounts[1].active);
+        assert_eq!(
+            accounts[1].identity.email.as_deref(),
+            Some("other@example.com")
+        );
+    }
+
+    #[test]
+    fn load_accounts_keeps_expired_next_to_live() {
+        let live_id = SCOPE;
+        let stale_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let live_tok = jwt("live@example.com", 4_102_444_800);
+        let stale_tok = jwt("stale@example.com", 1);
+        let json = serde_json::json!({
+            "cursor-accounts": {
+                "active": live_id,
+                "accounts": {
+                    stale_id: { "cursor-access-token": encrypt_field(&stale_tok) },
+                    live_id: { "cursor-access-token": encrypt_field(&live_tok) },
+                }
+            },
+            "cursor-machine-id": encrypt_field("machine-id-uuid"),
+        })
+        .to_string();
+        let accounts = accounts_from_secrets_json(&json, PASSWORD).unwrap();
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0].id, live_id);
+        assert!(accounts[0].token.is_some());
+        let stale = accounts.iter().find(|a| a.id == stale_id).unwrap();
+        assert!(stale.token.is_none());
+        assert!(matches!(stale.error, Some(AuthError::Expired)));
+        assert_eq!(stale.identity.email.as_deref(), Some("stale@example.com"));
+    }
+
+    #[test]
+    fn load_accounts_legacy_top_level_is_one_default() {
+        let token_plain = sample_token();
+        let json = serde_json::json!({
+            "cursor-access-token": encrypt_field(&token_plain),
+            "cursor-machine-id": encrypt_field("machine-id-uuid"),
+        })
+        .to_string();
+        let accounts = accounts_from_secrets_json(&json, PASSWORD).unwrap();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].id, "default");
+        assert!(accounts[0].active);
+        assert_eq!(accounts[0].token.as_deref(), Some(token_plain.as_str()));
+        assert_eq!(
+            accounts[0].identity.email.as_deref(),
+            Some("bot@example.com")
+        );
     }
 
     #[test]

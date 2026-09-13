@@ -1,6 +1,8 @@
 use crate::billing::{
-    FetchError, UsageSnapshot, fetch_usage, format_percent, format_remaining, period_label,
+    BuildAccountFetch, FetchError, UsageSnapshot, fetch_all_usage, format_percent,
+    format_remaining, period_label,
 };
+use crate::chip::{self, PanelChip, panel_chip, usage_bar};
 use crate::config::{APP_ID, Config, USAGE_URL};
 use crate::ring::{RingIcon, usage_color, usage_ring};
 use crate::sessions::{LiveSessions, live_sessions};
@@ -12,7 +14,7 @@ use cosmic::iced::event::listen_with;
 use cosmic::iced::platform_specific::shell::commands::popup::{destroy_popup, get_popup};
 use cosmic::iced::window::Id;
 use cosmic::iced::{Color, Length, Limits, Size, Subscription};
-use cosmic::widget::{self, button, column, container, divider, row, settings, space, text};
+use cosmic::widget::{self, button, column, container, divider, row, settings, text};
 use cosmic::{Element, Task, theme};
 use std::collections::VecDeque;
 use std::sync::LazyLock;
@@ -27,14 +29,22 @@ enum Page {
     Settings,
 }
 
+#[derive(Default)]
+struct AccountChip {
+    id: String,
+    identity: Option<String>,
+    snapshot: Option<UsageSnapshot>,
+    error: Option<FetchError>,
+    history: VecDeque<f32>,
+}
+
 pub struct GrokMonitor {
     core: Core,
     popup: Option<Id>,
     config: Config,
     config_handler: Option<cosmic_config::Config>,
-    snapshot: Option<UsageSnapshot>,
-    error: Option<FetchError>,
-    history: VecDeque<f32>,
+    accounts: Vec<AccountChip>,
+    selected: Option<String>,
     live: LiveSessions,
     page: Page,
     size: Size,
@@ -50,9 +60,8 @@ impl Default for GrokMonitor {
             popup: None,
             config: Config::default(),
             config_handler: None,
-            snapshot: None,
-            error: None,
-            history: VecDeque::new(),
+            accounts: vec![AccountChip::default()],
+            selected: None,
             live: LiveSessions::default(),
             page: Page::Overview,
             size: Size::new(10.0, 10.0),
@@ -67,10 +76,10 @@ impl Default for GrokMonitor {
 pub enum Message {
     Tick,
     Clock,
-    TogglePopup,
+    TogglePopup(String),
     PopupClosed(Id),
     Size(Size),
-    UsageFetched(Result<UsageSnapshot, FetchError>),
+    UsageFetched(Result<Vec<BuildAccountFetch>, FetchError>),
     OpenUsage,
     CopyPercent,
     ShowSettings,
@@ -79,6 +88,7 @@ pub enum Message {
     ToggleSparkline(bool),
     TogglePercent(bool),
     SetRemaining(bool),
+    SetLabel(String),
     ConfigChanged(Config),
 }
 
@@ -169,7 +179,7 @@ impl cosmic::Application for GrokMonitor {
                 }
                 self.fetching = true;
                 self.fetch_started = Some(std::time::Instant::now());
-                return Task::perform(fetch_usage(), |result| {
+                return Task::perform(fetch_all_usage(), |result| {
                     cosmic::action::Action::App(Message::UsageFetched(result))
                 });
             }
@@ -178,52 +188,29 @@ impl cosmic::Application for GrokMonitor {
                 self.fetching = false;
                 self.fetch_started = None;
                 match result {
-                    Ok(snapshot) => {
-                        self.error = None;
-                        if self.history.len() == HISTORY_LEN {
-                            self.history.pop_front();
-                        }
-                        self.history.push_back(snapshot.percent);
-                        self.snapshot = Some(snapshot);
-                    }
+                    Ok(fetches) => self.merge_fetches(fetches),
                     Err(err) => {
-                        if matches!(err, FetchError::Auth(_)) {
-                            self.snapshot = None;
-                            self.history.clear();
-                        }
-                        self.error = Some(err);
+                        self.accounts = vec![AccountChip {
+                            error: Some(err),
+                            ..AccountChip::default()
+                        }];
+                        self.selected = None;
                     }
                 }
             }
-            Message::TogglePopup => {
-                return if let Some(id) = self.popup.take() {
-                    self.page = Page::Overview;
-                    destroy_popup(id)
+            Message::TogglePopup(account_id) => {
+                if self.popup.is_some() && self.selected.as_ref() == Some(&account_id) {
+                    if let Some(id) = self.popup.take() {
+                        self.page = Page::Overview;
+                        return destroy_popup(id);
+                    }
                 } else {
+                    self.selected = Some(account_id);
                     self.live = live_sessions();
-                    let Some(parent) = self.core.main_window_id() else {
-                        tracing::warn!("popup requested with no main window");
-                        return Task::none();
-                    };
-                    let new_id = Id::unique();
-                    self.popup.replace(new_id);
-                    let mut popup_settings = self
-                        .core
-                        .applet
-                        .get_popup_settings(parent, new_id, None, None, None);
-                    popup_settings.positioner.anchor_rect = cosmic::iced::Rectangle {
-                        x: 0,
-                        y: 0,
-                        width: self.size.width as i32,
-                        height: self.size.height as i32,
-                    };
-                    popup_settings.positioner.size_limits = Limits::NONE
-                        .min_width(320.0)
-                        .max_width(380.0)
-                        .min_height(200.0)
-                        .max_height(520.0);
-                    get_popup(popup_settings)
-                };
+                    if self.popup.is_none() {
+                        return self.open_popup();
+                    }
+                }
             }
             Message::PopupClosed(id) => {
                 if self.popup.as_ref() == Some(&id) {
@@ -243,7 +230,7 @@ impl cosmic::Application for GrokMonitor {
                 }
             },
             Message::CopyPercent => {
-                if let Some(snapshot) = &self.snapshot {
+                if let Some(snapshot) = self.selected_chip().and_then(|c| c.snapshot.as_ref()) {
                     return cosmic::iced::clipboard::write(format_percent(
                         self.config.display_percent(snapshot.percent),
                     ));
@@ -271,6 +258,13 @@ impl cosmic::Application for GrokMonitor {
                 self.config.show_remaining = value;
                 self.save_config();
             }
+            Message::SetLabel(value) => {
+                let id = self.label_account_id();
+                if !id.is_empty() {
+                    self.config.set_account_label(id, value);
+                    self.save_config();
+                }
+            }
             Message::ConfigChanged(config) => {
                 self.config = config;
             }
@@ -279,41 +273,25 @@ impl cosmic::Application for GrokMonitor {
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
-        let (label, color) = self.chip_label();
-        let ring = self.usage_badge(color);
-        let percent = self
-            .core
-            .applet
-            .text(label)
-            .class(theme::Text::Color(color));
-
-        let mut children: Vec<Element<'_, Message>> = vec![ring];
-        if self.config.show_percent || self.snapshot.is_none() {
-            children.push(percent.into());
-        }
-        if self.config.show_sparkline && !self.history.is_empty() {
-            children.push(self.sparkline());
-        }
-
+        let chips: Vec<Element<'_, Message>> = self
+            .accounts
+            .iter()
+            .map(|account| self.account_chip(account))
+            .collect();
         let data = if self.core.applet.is_horizontal() {
             Element::from(
-                row::with_children(children)
+                row::with_children(chips)
                     .align_y(Vertical::Center)
-                    .spacing(4),
+                    .spacing(8),
             )
         } else {
             Element::from(
-                column::with_children(children)
+                column::with_children(chips)
                     .align_x(Horizontal::Center)
-                    .spacing(4),
+                    .spacing(8),
             )
         };
-
-        let button = button::custom(data)
-            .class(theme::Button::AppletIcon)
-            .on_press_down(Message::TogglePopup);
-
-        widget::autosize::autosize(button, PANEL_ID.clone()).into()
+        widget::autosize::autosize(data, PANEL_ID.clone()).into()
     }
 
     fn view_window(&self, _id: Id) -> Element<'_, Self::Message> {
@@ -338,80 +316,132 @@ impl GrokMonitor {
         }
     }
 
-    fn usage_badge(&self, color: Color) -> Element<'_, Message> {
+    fn selected_chip(&self) -> Option<&AccountChip> {
+        self.selected
+            .as_ref()
+            .and_then(|id| self.accounts.iter().find(|c| &c.id == id))
+            .or(self.accounts.first())
+    }
+
+    fn merge_fetches(&mut self, fetches: Vec<BuildAccountFetch>) {
+        if fetches.is_empty() {
+            self.accounts = vec![AccountChip {
+                error: Some(FetchError::Auth(crate::auth::AuthError::Missing)),
+                ..AccountChip::default()
+            }];
+            self.selected = None;
+            return;
+        }
+        let mut previous: std::collections::HashMap<String, AccountChip> =
+            std::mem::take(&mut self.accounts)
+                .into_iter()
+                .map(|chip| (chip.id.clone(), chip))
+                .collect();
+        self.accounts = fetches
+            .into_iter()
+            .map(|fetch| {
+                let mut chip = previous.remove(&fetch.id).unwrap_or_default();
+                chip.id = fetch.id;
+                if fetch.identity.is_some() {
+                    chip.identity = fetch.identity;
+                }
+                match fetch.result {
+                    Ok(snapshot) => {
+                        chip.error = None;
+                        if chip.history.len() == HISTORY_LEN {
+                            chip.history.pop_front();
+                        }
+                        chip.history.push_back(snapshot.percent);
+                        if chip.identity.is_none() {
+                            chip.identity = snapshot.email.clone();
+                        }
+                        chip.snapshot = Some(snapshot);
+                    }
+                    Err(err) => {
+                        if matches!(err, FetchError::Auth(_)) {
+                            chip.snapshot = None;
+                            chip.history.clear();
+                        }
+                        chip.error = Some(err);
+                    }
+                }
+                chip
+            })
+            .collect();
+        if self
+            .selected
+            .as_ref()
+            .is_none_or(|id| !self.accounts.iter().any(|c| &c.id == id))
+        {
+            self.selected = self.accounts.first().map(|c| c.id.clone());
+        }
+    }
+
+    fn open_popup(&mut self) -> Task<cosmic::Action<Message>> {
+        let Some(parent) = self.core.main_window_id() else {
+            tracing::warn!("popup requested with no main window");
+            return Task::none();
+        };
+        let new_id = Id::unique();
+        self.popup.replace(new_id);
+        let mut popup_settings = self
+            .core
+            .applet
+            .get_popup_settings(parent, new_id, None, None, None);
+        popup_settings.positioner.anchor_rect = cosmic::iced::Rectangle {
+            x: 0,
+            y: 0,
+            width: self.size.width as i32,
+            height: self.size.height as i32,
+        };
+        popup_settings.positioner.size_limits = Limits::NONE
+            .min_width(320.0)
+            .max_width(380.0)
+            .min_height(200.0)
+            .max_height(560.0);
+        get_popup(popup_settings)
+    }
+
+    fn account_chip(&self, account: &AccountChip) -> Element<'_, Message> {
+        let (label, color) = chip_label(account, &self.config);
         let theme = theme::active();
         let track: Color = theme.cosmic().on_bg_color().into();
-        let percent = self
+        let percent = account
             .snapshot
             .as_ref()
             .map(|s| self.config.display_percent(s.percent))
             .unwrap_or(0.0);
         let svg = usage_ring(percent, color, track, RingIcon::Hammer);
-        let size = self
-            .core
-            .applet
-            .suggested_size(true)
-            .0
-            .saturating_add(10)
-            .max(24);
-        widget::icon::from_svg_bytes(svg.into_bytes())
-            .symbolic(false)
-            .icon()
-            .size(size)
-            .into()
-    }
-
-    fn chip_label(&self) -> (String, Color) {
-        let theme = theme::active();
-        let cosmic = theme.cosmic();
-        match (&self.snapshot, &self.error) {
-            (Some(snapshot), err) => {
-                let mut color = usage_color(snapshot.percent);
-                if err.is_some() {
-                    color.a *= 0.7;
-                }
-                (
-                    format_percent(self.config.display_percent(snapshot.percent)),
-                    color,
-                )
-            }
-            (None, Some(FetchError::Auth(_))) => ("—".into(), cosmic.on_bg_color().into()),
-            (None, Some(_)) => ("?".into(), cosmic.warning_color().into()),
-            (None, None) => ("…".into(), cosmic.on_bg_color().into()),
-        }
-    }
-
-    fn sparkline(&self) -> Element<'_, Message> {
-        let bars: Vec<Element<'_, Message>> = self
-            .history
-            .iter()
-            .map(|p| {
-                let h = (p.clamp(0.0, 100.0) / 100.0 * 14.0).max(1.0);
-                container(space::vertical().height(Length::Fixed(h)))
-                    .width(Length::Fixed(2.0))
-                    .class(theme::Container::Primary)
-                    .into()
-            })
-            .collect();
-        row::with_children(bars)
-            .spacing(1)
-            .align_y(Vertical::Bottom)
-            .height(Length::Fixed(14.0))
-            .into()
+        let sparkline = (self.config.show_sparkline && !account.history.is_empty())
+            .then(|| chip::sparkline(&account.history));
+        panel_chip(
+            &self.core.applet,
+            svg,
+            PanelChip {
+                usage_label: label,
+                color,
+                show_usage: self.config.show_percent || account.snapshot.is_none(),
+                identity: self
+                    .config
+                    .chip_identity(&account.id, account.identity.as_deref()),
+                sparkline,
+                on_press: Message::TogglePopup(account.id.clone()),
+            },
+        )
     }
 
     fn overview(&self) -> Element<'_, Message> {
         let mut col = column::with_capacity(12).padding([12, 0]).spacing(8);
+        let chip = self.selected_chip();
+        let snapshot = chip.and_then(|c| c.snapshot.as_ref());
+        let error = chip.and_then(|c| c.error.as_ref());
 
-        let title = self
-            .snapshot
-            .as_ref()
+        let title = snapshot
             .and_then(|s| s.plan.as_deref())
             .unwrap_or("Grok Build");
-        let email = self
-            .snapshot
-            .as_ref()
+        let email = snapshot
             .and_then(|s| s.email.as_deref())
+            .or_else(|| chip.and_then(|c| c.identity.as_deref()))
             .unwrap_or("");
 
         col = col.push(padded(
@@ -422,9 +452,9 @@ impl GrokMonitor {
 
         col = col.push(padded(divider::horizontal::default()));
 
-        if let Some(snapshot) = &self.snapshot {
+        if let Some(snapshot) = snapshot {
             let shown = self.config.display_percent(snapshot.percent);
-            col = col.push(padded(self.gauge(shown)));
+            col = col.push(padded(usage_bar(shown, snapshot.percent)));
 
             let mut detail = format!(
                 "{} · {}",
@@ -447,7 +477,7 @@ impl GrokMonitor {
             col = col.push(padded(text::caption(format!("updated {age}s ago"))));
         }
 
-        if let Some(error) = &self.error {
+        if let Some(error) = error {
             col = col.push(padded(text::caption(error.to_string()).class(
                 theme::Text::Color({
                     let c = theme::active().cosmic().destructive_color();
@@ -528,6 +558,8 @@ impl GrokMonitor {
             widget::toggler(self.config.show_percent).on_toggle(Message::TogglePercent),
         )));
 
+        col = col.push(padded(self.label_setting()));
+
         col = col.push(padded(text::body("Panel number")));
         col = col.push(padded(
             row::with_capacity(2)
@@ -548,27 +580,66 @@ impl GrokMonitor {
         col.into()
     }
 
-    fn gauge(&self, percent: f32) -> Element<'_, Message> {
-        let filled = (percent.clamp(0.0, 100.0) * 10.0).round() as u16;
-        let rest = 1000u16.saturating_sub(filled).max(1);
-        let filled = filled.max(1);
-        container(
-            row::with_capacity(2)
-                .push(
-                    container(space::horizontal())
-                        .width(Length::FillPortion(filled))
-                        .height(Length::Fixed(8.0))
-                        .class(theme::Container::Primary),
-                )
-                .push(
-                    container(space::horizontal())
-                        .width(Length::FillPortion(rest))
-                        .height(Length::Fixed(8.0))
-                        .class(theme::Container::Background),
-                ),
-        )
-        .width(Length::Fill)
-        .into()
+    fn label_account_id(&self) -> String {
+        self.selected
+            .clone()
+            .filter(|id| !id.is_empty())
+            .or_else(|| {
+                self.accounts
+                    .iter()
+                    .map(|c| c.id.clone())
+                    .find(|id| !id.is_empty())
+            })
+            .unwrap_or_default()
+    }
+
+    fn label_setting(&self) -> Element<'_, Message> {
+        let id = self.label_account_id();
+        let auto = self
+            .accounts
+            .iter()
+            .find(|c| c.id == id)
+            .and_then(|c| c.identity.as_deref())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("account email");
+        let value = self
+            .config
+            .account_labels
+            .get(&id)
+            .cloned()
+            .unwrap_or_default();
+        let mut input = widget::text_input(auto, value).width(Length::Fill);
+        if !id.is_empty() {
+            input = input.on_input(Message::SetLabel);
+        }
+        column::with_capacity(3)
+            .push(text::body("Panel label"))
+            .push(input)
+            .push(text::caption(format!(
+                "Shown on the panel chip. Empty uses {auto}."
+            )))
+            .spacing(8)
+            .into()
+    }
+}
+
+fn chip_label(account: &AccountChip, config: &Config) -> (String, Color) {
+    let theme = theme::active();
+    let cosmic = theme.cosmic();
+    match (&account.snapshot, &account.error) {
+        (Some(snapshot), err) => {
+            let mut color = usage_color(snapshot.percent);
+            if err.is_some() {
+                color.a *= 0.7;
+            }
+            (
+                format_percent(config.display_percent(snapshot.percent)),
+                color,
+            )
+        }
+        (None, Some(FetchError::Auth(_))) => ("—".into(), cosmic.on_bg_color().into()),
+        (None, Some(_)) => ("?".into(), cosmic.warning_color().into()),
+        (None, None) => ("…".into(), cosmic.on_bg_color().into()),
     }
 }
 

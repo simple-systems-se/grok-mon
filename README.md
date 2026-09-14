@@ -49,6 +49,18 @@ Other distributions need the equivalent packages (`libxkbcommon-devel`,
 
 ## Install
 
+On Pop!_OS 24 (or Ubuntu 24.04 amd64), install a release `.deb`:
+
+```sh
+sudo apt install ./cosmic-ext-applet-grok-monitor_*_amd64.deb
+```
+
+Download that package from
+[GitHub Releases](https://github.com/simple-systems-se/grok-mon/releases).
+Each release also has a stripped binary tarball if you prefer not to use `apt`.
+
+To build from source and install for the current user:
+
 ```sh
 git clone https://github.com/simple-systems-se/grok-mon.git
 cd grok-mon
@@ -297,6 +309,14 @@ None of the applets:
 
 ## Uninstall
 
+If you installed the `.deb`:
+
+```sh
+sudo apt remove cosmic-ext-applet-grok-monitor
+```
+
+If you installed with `just install-user`:
+
 ```sh
 just uninstall-user
 ```
@@ -344,10 +364,15 @@ It does not delete `~/.config/grok-mon-api/credentials.json`.
 just test
 just check
 just build-release
+just package-linux
 just run
 just run -- --product=bot
 just run -- --product=api
 ```
+
+Tagged `v*` pushes run `.github/workflows/release.yml` on `ubuntu-24.04`
+and attach a `.deb` plus binary tarball to a GitHub Release. Use
+**Actions → Release → Run workflow** to build artifacts without publishing.
 
 Or with Cargo:
 

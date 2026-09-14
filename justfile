@@ -80,7 +80,8 @@ purge-user: uninstall-user
 
 # Build a Pop!_OS 24 / Ubuntu 24.04 .deb and a binary tarball into dist/.
 # Override the package version with VERSION=1.2.3 (leading v is stripped).
-package-linux: build-release
+package-linux:
+    cargo build --release --locked
     bash scripts/package-linux.sh
 
 clean:

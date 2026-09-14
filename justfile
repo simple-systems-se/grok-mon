@@ -78,5 +78,11 @@ uninstall-user:
 purge-user: uninstall-user
     rm -rf {{config-dst}} {{bot-config-dst}} {{api-config-dst}}
 
+# Build a Pop!_OS 24 / Ubuntu 24.04 .deb and a binary tarball into dist/.
+# Override the package version with VERSION=1.2.3 (leading v is stripped).
+package-linux: build-release
+    bash scripts/package-linux.sh
+
 clean:
     cargo clean
+    rm -rf dist

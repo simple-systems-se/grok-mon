@@ -268,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn lists_profile_desktops_and_matches_simple_systems() {
+    fn lists_profile_desktops_and_matches_work() {
         let dir = temp_dir("profiles");
         fs::write(
             dir.join("grok-bot.desktop"),
@@ -276,29 +276,25 @@ mod tests {
         )
         .unwrap();
         fs::write(
-            dir.join("grok-bot-personal.desktop"),
-            "[Desktop Entry]\nName=Grok Bot Personal\n",
+            dir.join("grok-bot-extra.desktop"),
+            "[Desktop Entry]\nName=Grok Bot Extra\n",
         )
         .unwrap();
         fs::write(
-            dir.join("grok-bot-simple-systems.desktop"),
-            "[Desktop Entry]\nName=Grok Bot Simple Systems\n",
+            dir.join("grok-bot-work.desktop"),
+            "[Desktop Entry]\nName=Grok Bot Work\n",
         )
         .unwrap();
         let listed = list_grok_bot_desktops(std::slice::from_ref(&dir));
         assert!(listed.iter().any(|p| p.ends_with("grok-bot.desktop")));
-        assert!(
-            listed
-                .iter()
-                .any(|p| p.ends_with("grok-bot-simple-systems.desktop"))
-        );
+        assert!(listed.iter().any(|p| p.ends_with("grok-bot-work.desktop")));
 
-        let work = PathBuf::from("/home/jeff/.config/Grok Bot Simple Systems");
+        let work = PathBuf::from("/home/user/.config/Grok Bot Work");
         let picked = pick_desktop(&listed, Some(&work)).unwrap();
-        assert!(picked.ends_with("grok-bot-simple-systems.desktop"));
+        assert!(picked.ends_with("grok-bot-work.desktop"));
 
-        let personal = PathBuf::from("/home/jeff/.config/Grok Bot");
-        let picked = pick_desktop(&listed, Some(&personal)).unwrap();
+        let default_profile = PathBuf::from("/home/user/.config/Grok Bot");
+        let picked = pick_desktop(&listed, Some(&default_profile)).unwrap();
         assert!(picked.ends_with("grok-bot.desktop"));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -317,13 +313,7 @@ mod tests {
 
     #[test]
     fn slug_match_ignores_spaces_and_hyphens() {
-        assert_eq!(
-            desktop_slug("Grok Bot Simple Systems"),
-            "grokbotsimplesystems"
-        );
-        assert_eq!(
-            desktop_slug("grok-bot-simple-systems"),
-            "grokbotsimplesystems"
-        );
+        assert_eq!(desktop_slug("Grok Bot Work"), "grokbotwork");
+        assert_eq!(desktop_slug("grok-bot-work"), "grokbotwork");
     }
 }

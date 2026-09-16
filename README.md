@@ -173,13 +173,13 @@ Auth comes from every Grok Bot userData directory the applet can find:
 - Auto-discovery: directories under `$XDG_CONFIG_HOME` (or `~/.config`) whose
   names start with `Grok Bot` and that contain `sand-secrets.json`. That
   includes the default `~/.config/Grok Bot` and extra profiles such as
-  `~/.config/Grok Bot Simple Systems`.
+  `~/.config/Grok Bot Work`.
 - Extra roots: colon-separated paths in `GROK_BOT_CONFIG_DIRS` (a `~/` prefix
   is expanded). Use this only for dirs that do not match the `Grok Bot*` name.
 
 Tokens are read-only. Chromium v10 blobs use OSCrypt’s built-in password;
 v11 blobs use the login keyring item whose `application=` label matches that
-directory’s name (`Grok Bot`, `Grok Bot Simple Systems`, …), then fall back
+directory’s name (`Grok Bot`, `Grok Bot Work`, …), then fall back
 to `application=Grok Bot`. The applet shows every `cursor-accounts` entry
 (active first) and still accepts the older top-level `cursor-access-token`
 field.
@@ -191,8 +191,8 @@ then the secrets-file active account, then the most recently used directory
 `Grok Bot` dir.
 
 **Open Grok Bot** launches the desktop file that matches the selected chip’s
-userData dir when it can (`grok-bot-simple-systems.desktop` for
-`Grok Bot Simple Systems`, and so on). Otherwise it starts the Grok Bot
+userData dir when it can (`grok-bot-work.desktop` for
+`Grok Bot Work`, and so on). Otherwise it starts the Grok Bot
 binary with `--user-data-dir`. Single-install setups keep the old
 `grok-bot.desktop` / `sand.desktop` behavior.
 
@@ -276,7 +276,7 @@ still works on its own). Additional directories can be listed in
 `GROK_BOT_CONFIG_DIRS`. Chromium v10 ciphertext uses the built-in OSCrypt
 password (`peanuts`); v11 ciphertext uses the login keyring item whose
 `application=` label is the directory name — Electron uses `app.getName()`
-for both userData and Safe Storage, so `Grok Bot Simple Systems` is a
+for both userData and Safe Storage, so `Grok Bot Work` is a
 different keyring item than `Grok Bot`. The lookup prefers
 `xdg:schema=chrome_libsecret_os_crypt_password_v2` and still tries
 `application=Grok Bot` if the per-directory item is missing. On COSMIC,

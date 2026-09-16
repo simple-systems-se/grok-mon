@@ -1189,16 +1189,16 @@ mod tests {
     fn merge_same_email_prefers_active_then_recent() {
         let stale = sample_account(
             "aaaa",
-            "jeff@example.com",
+            "user@example.com",
             false,
-            "/tmp/Grok Bot Simple Systems",
+            "/tmp/Grok Bot Work",
             200,
             true,
             false,
         );
         let active = sample_account(
             "aaaa",
-            "jeff@example.com",
+            "user@example.com",
             true,
             "/tmp/Grok Bot",
             100,
@@ -1220,7 +1220,7 @@ mod tests {
             "bbbb",
             "work@example.com",
             false,
-            "/tmp/Grok Bot Simple Systems",
+            "/tmp/Grok Bot Work",
             50,
             true,
             true,
@@ -1239,7 +1239,7 @@ mod tests {
         assert!(merged[0].running);
         assert_eq!(
             merged[0].config_dir.file_name().and_then(|n| n.to_str()),
-            Some("Grok Bot Simple Systems")
+            Some("Grok Bot Work")
         );
     }
 
@@ -1247,7 +1247,7 @@ mod tests {
     fn merge_keeps_distinct_emails() {
         let personal = sample_account(
             "default",
-            "jeff@example.com",
+            "user@example.com",
             true,
             "/tmp/Grok Bot",
             10,
@@ -1256,9 +1256,9 @@ mod tests {
         );
         let work = sample_account(
             "default",
-            "jeff@simplesystems.tech",
+            "work@example.com",
             true,
-            "/tmp/Grok Bot Simple Systems",
+            "/tmp/Grok Bot Work",
             20,
             true,
             false,
@@ -1267,7 +1267,7 @@ mod tests {
         assert_eq!(merged.len(), 2);
         let mut ids: Vec<_> = merged.iter().map(|a| a.id.as_str()).collect();
         ids.sort();
-        assert_eq!(ids, vec!["default", "default:Grok Bot Simple Systems"]);
+        assert_eq!(ids, vec!["default", "default:Grok Bot Work"]);
     }
 
     #[test]
@@ -1289,20 +1289,19 @@ mod tests {
             .to_string()
         }
         let mut personal =
-            first_matching_accounts(&v10_blob("jeff@example.com"), [OSCRYPT_V10_PASSWORD]).unwrap();
+            first_matching_accounts(&v10_blob("user@example.com"), [OSCRYPT_V10_PASSWORD]).unwrap();
         let mut work =
-            first_matching_accounts(&v10_blob("jeff@simplesystems.tech"), [OSCRYPT_V10_PASSWORD])
-                .unwrap();
+            first_matching_accounts(&v10_blob("work@example.com"), [OSCRYPT_V10_PASSWORD]).unwrap();
         personal[0].config_dir = PathBuf::from("/tmp/Grok Bot");
-        work[0].config_dir = PathBuf::from("/tmp/Grok Bot Simple Systems");
+        work[0].config_dir = PathBuf::from("/tmp/Grok Bot Work");
         let merged = merge_duplicate_accounts(personal.into_iter().chain(work).collect());
         assert_eq!(merged.len(), 2);
         let emails: Vec<_> = merged
             .iter()
             .filter_map(|a| a.identity.email.as_deref())
             .collect();
-        assert!(emails.contains(&"jeff@example.com"));
-        assert!(emails.contains(&"jeff@simplesystems.tech"));
+        assert!(emails.contains(&"user@example.com"));
+        assert!(emails.contains(&"work@example.com"));
     }
 
     #[test]
@@ -1320,7 +1319,7 @@ mod tests {
             "cccc",
             "same@example.com",
             false,
-            "/tmp/Grok Bot Simple Systems",
+            "/tmp/Grok Bot Work",
             1,
             true,
             false,
@@ -1330,7 +1329,7 @@ mod tests {
         assert!(merged[0].token.is_some());
         assert_eq!(
             merged[0].config_dir.file_name().and_then(|n| n.to_str()),
-            Some("Grok Bot Simple Systems")
+            Some("Grok Bot Work")
         );
     }
 

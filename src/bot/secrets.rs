@@ -1,3 +1,7 @@
+use super::roots::{
+    DEFAULT_GROK_BOT_DIR_NAME, discover_config_roots, keyring_app_name, root_used_at, secrets_path,
+    session_marker_path,
+};
 use aes::Aes128;
 use cbc::Decryptor;
 use cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
@@ -8,7 +12,10 @@ use serde_json::Value;
 use sha1::Sha1;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use zeroize::{Zeroize, Zeroizing};
+
+pub use super::roots::grok_bot_config_dir;
 
 const SCOPED_PREFIX: &str = "scoped:v1:";
 const ACCOUNT_SCOPE_LEN: usize = 64;
@@ -75,6 +82,9 @@ pub struct CursorAccount {
     pub token: Option<String>,
     pub machine_id: String,
     pub error: Option<AuthError>,
+    pub config_dir: PathBuf,
+    pub used_at: Option<SystemTime>,
+    pub running: bool,
 }
 
 impl Drop for CursorAccount {
@@ -91,22 +101,6 @@ impl Drop for CursorBearer {
         self.token.zeroize();
         self.machine_id.zeroize();
     }
-}
-
-pub fn grok_bot_config_dir() -> PathBuf {
-    grok_bot_config_dir_from(std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from))
-}
-
-fn grok_bot_config_dir_from(xdg: Option<PathBuf>) -> PathBuf {
-    xdg.filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| dirs_home().join(".config"))
-        .join("Grok Bot")
-}
-
-fn dirs_home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -349,8 +343,21 @@ fn token_expired(token: &str) -> bool {
 
 #[allow(dead_code)]
 pub async fn load_bearer() -> Result<CursorBearer, AuthError> {
-    let path = grok_bot_config_dir().join("sand-secrets.json");
-    load_bearer_from_path(&path).await
+    let mut last = AuthError::Missing;
+    let mut paths: Vec<PathBuf> = discover_config_roots()
+        .into_iter()
+        .map(|dir| secrets_path(&dir))
+        .collect();
+    if paths.is_empty() {
+        paths.push(secrets_path(&grok_bot_config_dir()));
+    }
+    for path in paths {
+        match load_bearer_from_path(&path).await {
+            Ok(bearer) => return Ok(bearer),
+            Err(err) => last = err,
+        }
+    }
+    Err(last)
 }
 
 #[allow(dead_code)]
@@ -361,34 +368,214 @@ pub async fn load_bearer_from_path(path: &Path) -> Result<CursorBearer, AuthErro
         Err(err @ (AuthError::Expired | AuthError::Missing)) => return Err(err),
         Err(err) => err,
     };
-    let passwords =
-        match tokio::time::timeout(std::time::Duration::from_secs(15), keyring_passwords()).await {
-            Ok(Ok(passwords)) => passwords,
-            Ok(Err(err)) => return Err(err),
-            Err(_) => return Err(AuthError::Keyring),
-        };
+    let passwords = match tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        keyring_passwords(&keyring_names_for_path(path)),
+    )
+    .await
+    {
+        Ok(Ok(passwords)) => passwords,
+        Ok(Err(err)) => return Err(err),
+        Err(_) => return Err(AuthError::Keyring),
+    };
     bearer_after_keyring(&raw, v10_err, &passwords)
 }
 
 pub async fn load_accounts() -> Result<Vec<CursorAccount>, AuthError> {
-    let path = grok_bot_config_dir().join("sand-secrets.json");
-    load_accounts_from_path(&path).await
+    let roots = discover_config_roots();
+    if roots.is_empty() {
+        return load_accounts_from_path(&secrets_path(&grok_bot_config_dir())).await;
+    }
+    load_accounts_from_roots(&roots).await
+}
+
+pub async fn load_accounts_from_roots(roots: &[PathBuf]) -> Result<Vec<CursorAccount>, AuthError> {
+    if roots.is_empty() {
+        return Err(AuthError::Missing);
+    }
+
+    let mut loaded = Vec::new();
+    let mut pending_keyring = Vec::new();
+    let mut last_err = AuthError::Missing;
+
+    for root in roots {
+        let path = secrets_path(root);
+        match std::fs::read_to_string(&path) {
+            Ok(raw) => {
+                match first_matching_accounts(&raw, [OSCRYPT_V10_PASSWORD, b"".as_slice()]) {
+                    Ok(accounts) => loaded.extend(attach_root(accounts, root)),
+                    Err(AuthError::Missing) => last_err = AuthError::Missing,
+                    Err(err) => pending_keyring.push((root.clone(), raw, err)),
+                }
+            }
+            Err(_) => last_err = AuthError::Missing,
+        }
+    }
+
+    if !pending_keyring.is_empty() {
+        let mut names: Vec<String> = pending_keyring
+            .iter()
+            .map(|(root, _, _)| keyring_app_name(root))
+            .collect();
+        if !names.iter().any(|n| n == DEFAULT_GROK_BOT_DIR_NAME) {
+            names.push(DEFAULT_GROK_BOT_DIR_NAME.into());
+        }
+        names.sort();
+        names.dedup();
+        let passwords = match tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            keyring_passwords(&names),
+        )
+        .await
+        {
+            Ok(Ok(passwords)) => passwords,
+            Ok(Err(err)) => return Err(err),
+            Err(_) => return Err(AuthError::Keyring),
+        };
+        for (root, raw, v10_err) in pending_keyring {
+            match accounts_after_keyring(&raw, v10_err, &passwords) {
+                Ok(accounts) => loaded.extend(attach_root(accounts, &root)),
+                Err(err) => {
+                    tracing::warn!(
+                        root = %keyring_app_name(&root),
+                        error = %err,
+                        "failed to read Grok Bot secrets"
+                    );
+                    last_err = err;
+                }
+            }
+        }
+    }
+
+    if loaded.is_empty() {
+        return Err(last_err);
+    }
+    Ok(merge_duplicate_accounts(loaded))
 }
 
 pub async fn load_accounts_from_path(path: &Path) -> Result<Vec<CursorAccount>, AuthError> {
     let raw = std::fs::read_to_string(path).map_err(|_| AuthError::Missing)?;
     let v10_err = match first_matching_accounts(&raw, [OSCRYPT_V10_PASSWORD, b"".as_slice()]) {
-        Ok(accounts) => return Ok(accounts),
+        Ok(accounts) => {
+            return Ok(attach_root(
+                accounts,
+                path.parent().unwrap_or_else(|| Path::new(".")),
+            ));
+        }
         Err(err @ AuthError::Missing) => return Err(err),
         Err(err) => err,
     };
-    let passwords =
-        match tokio::time::timeout(std::time::Duration::from_secs(15), keyring_passwords()).await {
-            Ok(Ok(passwords)) => passwords,
-            Ok(Err(err)) => return Err(err),
-            Err(_) => return Err(AuthError::Keyring),
-        };
+    let passwords = match tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        keyring_passwords(&keyring_names_for_path(path)),
+    )
+    .await
+    {
+        Ok(Ok(passwords)) => passwords,
+        Ok(Err(err)) => return Err(err),
+        Err(_) => return Err(AuthError::Keyring),
+    };
     accounts_after_keyring(&raw, v10_err, &passwords)
+        .map(|accounts| attach_root(accounts, path.parent().unwrap_or_else(|| Path::new("."))))
+}
+
+fn keyring_names_for_path(path: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Some(parent) = path.parent() {
+        names.push(keyring_app_name(parent));
+    }
+    if !names.iter().any(|n| n == DEFAULT_GROK_BOT_DIR_NAME) {
+        names.push(DEFAULT_GROK_BOT_DIR_NAME.into());
+    }
+    names
+}
+
+fn attach_root(mut accounts: Vec<CursorAccount>, root: &Path) -> Vec<CursorAccount> {
+    let used_at = root_used_at(root);
+    let running = super::roster::session_running(&session_marker_path(root));
+    for account in &mut accounts {
+        account.config_dir = root.to_path_buf();
+        account.used_at = Some(used_at);
+        account.running = running;
+    }
+    accounts
+}
+
+/// Same Cursor account in more than one userData dir: keep one chip.
+/// Prefer a live token, then a running install, then the secrets-file active
+/// account, then the most recently used root, then the default `Grok Bot` dir.
+pub fn merge_duplicate_accounts(accounts: Vec<CursorAccount>) -> Vec<CursorAccount> {
+    let mut by_key: HashMap<String, CursorAccount> = HashMap::new();
+    for account in accounts {
+        let key = account_merge_key(&account);
+        match by_key.remove(&key) {
+            Some(existing) if !prefer_account(&account, &existing) => {
+                by_key.insert(key, existing);
+            }
+            _ => {
+                by_key.insert(key, account);
+            }
+        }
+    }
+    let mut merged: Vec<CursorAccount> = by_key.into_values().collect();
+    sort_accounts(&mut merged);
+    uniquify_account_ids(&mut merged);
+    merged
+}
+
+fn account_merge_key(account: &CursorAccount) -> String {
+    account
+        .identity
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|email| format!("email:{}", email.to_ascii_lowercase()))
+        .unwrap_or_else(|| format!("id:{}", account.id.to_ascii_lowercase()))
+}
+
+fn prefer_account(candidate: &CursorAccount, current: &CursorAccount) -> bool {
+    let cand_live = candidate.token.is_some();
+    let cur_live = current.token.is_some();
+    if cand_live != cur_live {
+        return cand_live;
+    }
+    if candidate.running != current.running {
+        return candidate.running;
+    }
+    if candidate.active != current.active {
+        return candidate.active;
+    }
+    match (candidate.used_at, current.used_at) {
+        (Some(left), Some(right)) if left != right => return left > right,
+        (Some(_), None) => return true,
+        (None, Some(_)) => return false,
+        _ => {}
+    }
+    is_default_root(&candidate.config_dir) && !is_default_root(&current.config_dir)
+}
+
+fn is_default_root(dir: &Path) -> bool {
+    dir.file_name()
+        .is_some_and(|name| name == DEFAULT_GROK_BOT_DIR_NAME)
+}
+
+fn uniquify_account_ids(accounts: &mut [CursorAccount]) {
+    let mut seen = HashMap::<String, usize>::new();
+    for account in accounts.iter_mut() {
+        let count = seen.entry(account.id.clone()).or_insert(0);
+        *count += 1;
+        if *count == 1 {
+            continue;
+        }
+        let slug = account
+            .config_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("dir");
+        account.id = format!("{}:{slug}", account.id);
+    }
 }
 
 fn accounts_after_keyring(
@@ -503,6 +690,9 @@ fn account_from_stored(
         token: if expired { None } else { Some(token) },
         machine_id: machine_id.to_string(),
         error: expired.then_some(AuthError::Expired),
+        config_dir: PathBuf::new(),
+        used_at: None,
+        running: false,
     })
 }
 
@@ -551,26 +741,43 @@ pub fn first_matching_bearer(
     }
 }
 
-async fn keyring_passwords() -> Result<Vec<Zeroizing<Vec<u8>>>, AuthError> {
+async fn keyring_passwords(app_names: &[String]) -> Result<Vec<Zeroizing<Vec<u8>>>, AuthError> {
     use secret_service::{EncryptionType, SecretService};
     let ss = SecretService::connect(EncryptionType::Dh)
         .await
         .map_err(|_| AuthError::Keyring)?;
-    let schema_search = ss
-        .search_items(HashMap::from([
-            ("application", "Grok Bot"),
-            ("xdg:schema", "chrome_libsecret_os_crypt_password_v2"),
-        ]))
-        .await
-        .map_err(|_| AuthError::Keyring)?;
-    let search = if schema_search.unlocked.is_empty() && schema_search.locked.is_empty() {
-        ss.search_items(HashMap::from([("application", "Grok Bot")]))
-            .await
-            .map_err(|_| AuthError::Keyring)?
+    let names = if app_names.is_empty() {
+        vec![DEFAULT_GROK_BOT_DIR_NAME.to_string()]
     } else {
-        schema_search
+        app_names.to_vec()
     };
-    secrets_from_search(search).await
+    let mut passwords = Vec::new();
+    let mut unlock_failed = false;
+    for name in &names {
+        let schema_search = ss
+            .search_items(HashMap::from([
+                ("application", name.as_str()),
+                ("xdg:schema", "chrome_libsecret_os_crypt_password_v2"),
+            ]))
+            .await
+            .map_err(|_| AuthError::Keyring)?;
+        let search = if schema_search.unlocked.is_empty() && schema_search.locked.is_empty() {
+            ss.search_items(HashMap::from([("application", name.as_str())]))
+                .await
+                .map_err(|_| AuthError::Keyring)?
+        } else {
+            schema_search
+        };
+        match secrets_from_search(search).await {
+            Ok(mut found) => passwords.append(&mut found),
+            Err(AuthError::Keyring) => unlock_failed = true,
+            Err(err) => return Err(err),
+        }
+    }
+    if passwords.is_empty() && unlock_failed {
+        return Err(AuthError::Keyring);
+    }
+    Ok(passwords)
 }
 
 async fn secrets_from_search(
@@ -953,15 +1160,177 @@ mod tests {
         );
     }
 
+    fn sample_account(
+        id: &str,
+        email: &str,
+        active: bool,
+        dir: &str,
+        used: u64,
+        live: bool,
+        running: bool,
+    ) -> CursorAccount {
+        CursorAccount {
+            id: id.into(),
+            active,
+            identity: Identity {
+                email: Some(email.into()),
+                name: None,
+            },
+            token: live.then(|| "tok".into()),
+            machine_id: "m".into(),
+            error: (!live).then_some(AuthError::Expired),
+            config_dir: PathBuf::from(dir),
+            used_at: Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(used)),
+            running,
+        }
+    }
+
     #[test]
-    fn grok_bot_config_dir_uses_xdg() {
-        assert_eq!(
-            grok_bot_config_dir_from(Some(PathBuf::from("/tmp/xdg"))),
-            PathBuf::from("/tmp/xdg/Grok Bot")
+    fn merge_same_email_prefers_active_then_recent() {
+        let stale = sample_account(
+            "aaaa",
+            "jeff@example.com",
+            false,
+            "/tmp/Grok Bot Simple Systems",
+            200,
+            true,
+            false,
         );
+        let active = sample_account(
+            "aaaa",
+            "jeff@example.com",
+            true,
+            "/tmp/Grok Bot",
+            100,
+            true,
+            false,
+        );
+        let merged = merge_duplicate_accounts(vec![stale, active]);
+        assert_eq!(merged.len(), 1);
+        assert!(merged[0].active);
         assert_eq!(
-            grok_bot_config_dir_from(Some(PathBuf::from(""))),
-            dirs_home().join(".config/Grok Bot")
+            merged[0].config_dir.file_name().and_then(|n| n.to_str()),
+            Some("Grok Bot")
+        );
+    }
+
+    #[test]
+    fn merge_same_email_prefers_running_over_older_active() {
+        let running = sample_account(
+            "bbbb",
+            "work@example.com",
+            false,
+            "/tmp/Grok Bot Simple Systems",
+            50,
+            true,
+            true,
+        );
+        let active = sample_account(
+            "bbbb",
+            "work@example.com",
+            true,
+            "/tmp/Grok Bot",
+            400,
+            true,
+            false,
+        );
+        let merged = merge_duplicate_accounts(vec![active, running]);
+        assert_eq!(merged.len(), 1);
+        assert!(merged[0].running);
+        assert_eq!(
+            merged[0].config_dir.file_name().and_then(|n| n.to_str()),
+            Some("Grok Bot Simple Systems")
+        );
+    }
+
+    #[test]
+    fn merge_keeps_distinct_emails() {
+        let personal = sample_account(
+            "default",
+            "jeff@example.com",
+            true,
+            "/tmp/Grok Bot",
+            10,
+            true,
+            false,
+        );
+        let work = sample_account(
+            "default",
+            "jeff@simplesystems.tech",
+            true,
+            "/tmp/Grok Bot Simple Systems",
+            20,
+            true,
+            false,
+        );
+        let merged = merge_duplicate_accounts(vec![personal, work]);
+        assert_eq!(merged.len(), 2);
+        let mut ids: Vec<_> = merged.iter().map(|a| a.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["default", "default:Grok Bot Simple Systems"]);
+    }
+
+    #[test]
+    fn two_profile_v10_secrets_become_two_chips() {
+        fn v10_blob(email: &str) -> String {
+            let token = jwt(email, 4_102_444_800);
+            serde_json::json!({
+                "cursor-access-token": BASE64.encode(&encrypt_oscrypt(
+                    token.as_bytes(),
+                    OSCRYPT_V10_PASSWORD,
+                    b"v10",
+                )),
+                "cursor-machine-id": BASE64.encode(&encrypt_oscrypt(
+                    b"machine-id-uuid",
+                    OSCRYPT_V10_PASSWORD,
+                    b"v10",
+                )),
+            })
+            .to_string()
+        }
+        let mut personal =
+            first_matching_accounts(&v10_blob("jeff@example.com"), [OSCRYPT_V10_PASSWORD]).unwrap();
+        let mut work =
+            first_matching_accounts(&v10_blob("jeff@simplesystems.tech"), [OSCRYPT_V10_PASSWORD])
+                .unwrap();
+        personal[0].config_dir = PathBuf::from("/tmp/Grok Bot");
+        work[0].config_dir = PathBuf::from("/tmp/Grok Bot Simple Systems");
+        let merged = merge_duplicate_accounts(personal.into_iter().chain(work).collect());
+        assert_eq!(merged.len(), 2);
+        let emails: Vec<_> = merged
+            .iter()
+            .filter_map(|a| a.identity.email.as_deref())
+            .collect();
+        assert!(emails.contains(&"jeff@example.com"));
+        assert!(emails.contains(&"jeff@simplesystems.tech"));
+    }
+
+    #[test]
+    fn merge_prefers_live_token_over_expired() {
+        let expired = sample_account(
+            "cccc",
+            "same@example.com",
+            true,
+            "/tmp/Grok Bot",
+            500,
+            false,
+            true,
+        );
+        let live = sample_account(
+            "cccc",
+            "same@example.com",
+            false,
+            "/tmp/Grok Bot Simple Systems",
+            1,
+            true,
+            false,
+        );
+        let merged = merge_duplicate_accounts(vec![expired, live]);
+        assert_eq!(merged.len(), 1);
+        assert!(merged[0].token.is_some());
+        assert_eq!(
+            merged[0].config_dir.file_name().and_then(|n| n.to_str()),
+            Some("Grok Bot Simple Systems")
         );
     }
 

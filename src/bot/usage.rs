@@ -29,6 +29,7 @@ pub struct BotSnapshot {
 pub struct BotAccountFetch {
     pub id: String,
     pub identity: Option<String>,
+    pub config_dir: std::path::PathBuf,
     pub result: Result<BotSnapshot, FetchError>,
 }
 
@@ -275,12 +276,12 @@ async fn post_connect(
 pub async fn fetch_all_bot_usage() -> Result<Vec<BotAccountFetch>, FetchError> {
     let accounts = load_accounts().await.map_err(FetchError::Auth)?;
     let client = http_client()?;
-    let version = super::secrets::client_version_from_marker(
-        &super::secrets::grok_bot_config_dir().join("sand-session-marker.json"),
-    );
     let jobs: Vec<_> = accounts
         .iter()
         .map(|account| {
+            let version = super::secrets::client_version_from_marker(
+                &super::roots::session_marker_path(&account.config_dir),
+            );
             (
                 account.id.clone(),
                 account.identity.email.clone(),
@@ -288,14 +289,14 @@ pub async fn fetch_all_bot_usage() -> Result<Vec<BotAccountFetch>, FetchError> {
                 account.token.clone(),
                 account.machine_id.clone(),
                 account.error.clone(),
+                account.config_dir.clone(),
+                version,
             )
         })
         .collect();
-    let fetches = jobs
-        .into_iter()
-        .map(|(id, email, name, token, machine_id, error)| {
+    let fetches = jobs.into_iter().map(
+        |(id, email, name, token, machine_id, error, config_dir, version)| {
             let client = client.clone();
-            let version = version.clone();
             async move {
                 let identity = display_identity(email.as_deref(), name.as_deref());
                 let result = match token {
@@ -326,10 +327,12 @@ pub async fn fetch_all_bot_usage() -> Result<Vec<BotAccountFetch>, FetchError> {
                 BotAccountFetch {
                     id,
                     identity,
+                    config_dir,
                     result,
                 }
             }
-        });
+        },
+    );
     Ok(join_all(fetches).await)
 }
 

@@ -185,10 +185,7 @@ mod tests {
 
     #[test]
     fn truncate_identity_keeps_short() {
-        assert_eq!(
-            truncate_identity("jeff@simplesystems.tech"),
-            "jeff@simplesystems.tech"
-        );
+        assert_eq!(truncate_identity("user@example.com"), "user@example.com");
         assert_eq!(truncate_identity("ab"), "ab");
     }
 

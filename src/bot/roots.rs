@@ -35,7 +35,7 @@ pub fn home_dir() -> PathBuf {
 /// Electron / Chromium OSCrypt libsecret `application=` label. Electron uses
 /// `app.getName()` (the product name) for both userData (`~/.config/<name>`)
 /// and the Safe Storage keyring item, so the directory basename is the right
-/// label: `Grok Bot` vs `Grok Bot Simple Systems`.
+/// label: `Grok Bot` vs `Grok Bot Work`.
 pub fn keyring_app_name(config_dir: &Path) -> String {
     config_dir
         .file_name()
@@ -195,12 +195,12 @@ mod tests {
     #[test]
     fn keyring_name_is_directory_basename() {
         assert_eq!(
-            keyring_app_name(Path::new("/home/jeff/.config/Grok Bot")),
+            keyring_app_name(Path::new("/home/user/.config/Grok Bot")),
             "Grok Bot"
         );
         assert_eq!(
-            keyring_app_name(Path::new("/home/jeff/.config/Grok Bot Simple Systems")),
-            "Grok Bot Simple Systems"
+            keyring_app_name(Path::new("/home/user/.config/Grok Bot Work")),
+            "Grok Bot Work"
         );
         assert_eq!(keyring_app_name(Path::new("/")), "Grok Bot");
     }
@@ -209,7 +209,7 @@ mod tests {
     fn discovers_default_and_prefixed_dirs_with_secrets() {
         let xdg = temp_xdg();
         touch_secrets(&xdg.join("Grok Bot"));
-        touch_secrets(&xdg.join("Grok Bot Simple Systems"));
+        touch_secrets(&xdg.join("Grok Bot Work"));
         touch_secrets(&xdg.join("Other App"));
         fs::create_dir_all(xdg.join("Grok Bot Cache")).unwrap();
         fs::write(xdg.join("Grok Bot").join("not-secrets"), "").unwrap();
@@ -221,10 +221,7 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            vec![
-                "Grok Bot".to_string(),
-                "Grok Bot Simple Systems".to_string()
-            ]
+            vec!["Grok Bot".to_string(), "Grok Bot Work".to_string()]
         );
         let _ = fs::remove_dir_all(&xdg);
     }

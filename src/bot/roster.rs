@@ -299,7 +299,7 @@ mod tests {
     fn live_roster_merges_roots_and_dedupes_names() {
         let dir = std::env::temp_dir().join(format!("grok-mon-bot-multi-{}", process::id()));
         let personal = dir.join("Grok Bot");
-        let work = dir.join("Grok Bot Simple Systems");
+        let work = dir.join("Grok Bot Work");
         let persist_a = personal.join("sand-client-persistence");
         let persist_b = work.join("sand-client-persistence");
         let _ = fs::remove_dir_all(&dir);

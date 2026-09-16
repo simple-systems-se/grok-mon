@@ -31,6 +31,11 @@
     <content_attribute id="social-info">mild</content_attribute>
   </content_rating>
   <releases>
+    <release version="0.2.0" date="2026-09-16">
+      <description>
+        <p>Version bump to match the shared applet package.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-08-31">
       <description>
         <p>Initial API prepaid remaining-credits applet.</p>

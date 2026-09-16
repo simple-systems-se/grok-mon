@@ -1,6 +1,9 @@
-use super::secrets::grok_bot_config_dir;
+use super::roots::{
+    discover_config_roots, grok_bot_config_dir, persistence_path, session_marker_path,
+};
 use data_encoding::BASE32;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, Default)]
@@ -50,18 +53,42 @@ struct SessionMarker {
 }
 
 pub fn live_roster() -> BotRoster {
-    live_roster_from(&grok_bot_config_dir())
+    let roots = discover_config_roots();
+    if roots.is_empty() {
+        return live_roster_from(&grok_bot_config_dir());
+    }
+    live_roster_from_roots(&roots)
 }
 
 pub fn live_roster_from(config_dir: &Path) -> BotRoster {
-    let running = session_running(&config_dir.join("sand-session-marker.json"));
-    let Some(rows) = load_rows(&config_dir.join("sand-client-persistence")) else {
-        return BotRoster {
-            running,
-            ..BotRoster::default()
-        };
-    };
-    summarize(rows, running)
+    live_roster_from_roots(&[config_dir])
+}
+
+pub fn live_roster_from_roots<P: AsRef<Path>>(roots: &[P]) -> BotRoster {
+    let mut rows = Vec::new();
+    let mut running = false;
+    for root in roots {
+        let root = root.as_ref();
+        running |= session_running(&session_marker_path(root));
+        if let Some(found) = load_rows(&persistence_path(root)) {
+            rows.extend(found);
+        }
+    }
+    summarize(dedupe_rows(rows), running)
+}
+
+fn dedupe_rows(rows: Vec<BotRow>) -> Vec<BotRow> {
+    let mut best: HashMap<String, BotRow> = HashMap::new();
+    for row in rows {
+        let key = row.name.to_ascii_lowercase();
+        match best.get(&key) {
+            Some(existing) if existing.last_activity_at >= row.last_activity_at => {}
+            _ => {
+                best.insert(key, row);
+            }
+        }
+    }
+    best.into_values().collect()
 }
 
 pub fn summarize(mut rows: Vec<BotRow>, running: bool) -> BotRoster {
@@ -265,6 +292,47 @@ mod tests {
         let live = live_roster_from(&dir);
         assert_eq!(live.count, 2);
         assert!(live.running);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn live_roster_merges_roots_and_dedupes_names() {
+        let dir = std::env::temp_dir().join(format!("grok-mon-bot-multi-{}", process::id()));
+        let personal = dir.join("Grok Bot");
+        let work = dir.join("Grok Bot Simple Systems");
+        let persist_a = personal.join("sand-client-persistence");
+        let persist_b = work.join("sand-client-persistence");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&persist_a).unwrap();
+        fs::create_dir_all(&persist_b).unwrap();
+
+        let key = "sand.client.slice.account.demo.roster.last-roster";
+        fs::write(
+            persist_a.join(format!("{}.blob", encode_base32_key(key))),
+            br#"{"schemaVersion":2,"value":{"rows":[{"name":"Chief","unreadCount":1,"lastActivityAt":10},{"name":"Shared","unreadCount":2,"lastActivityAt":5}]}}"#,
+        )
+        .unwrap();
+        fs::write(
+            persist_b.join(format!("{}.blob", encode_base32_key(key))),
+            br#"{"schemaVersion":2,"value":{"rows":[{"name":"Research","unreadCount":4,"lastActivityAt":20},{"name":"Shared","unreadCount":1,"lastActivityAt":50}]}}"#,
+        )
+        .unwrap();
+        fs::write(
+            personal.join("sand-session-marker.json"),
+            r#"{"pid":2147483646}"#,
+        )
+        .unwrap();
+        fs::write(
+            work.join("sand-session-marker.json"),
+            format!(r#"{{"pid":{}}}"#, process::id()),
+        )
+        .unwrap();
+
+        let live = live_roster_from_roots(&[personal, work]);
+        assert!(live.running);
+        assert_eq!(live.count, 3);
+        assert_eq!(live.unread, 6);
+        assert_eq!(live.names[0], "Shared");
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -16,6 +16,7 @@ use cosmic::iced::{Color, Length, Limits, Size, Subscription};
 use cosmic::widget::{self, button, column, container, divider, row, settings, text};
 use cosmic::{Element, Task, theme};
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 static PANEL_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("grok-bot-monitor-panel"));
@@ -35,6 +36,7 @@ struct AccountChip {
     snapshot: Option<BotSnapshot>,
     error: Option<FetchError>,
     history: VecDeque<f32>,
+    config_dir: PathBuf,
 }
 
 pub struct GrokBotMonitor {
@@ -221,7 +223,7 @@ impl cosmic::Application for GrokBotMonitor {
             Message::Size(size) => {
                 self.size = size;
             }
-            Message::OpenApp => match launch::open_grok_bot() {
+            Message::OpenApp => match launch::open_grok_bot_for(self.selected_config_dir()) {
                 Ok(()) => self.open_error = None,
                 Err(err) => {
                     tracing::error!("failed to open Grok Bot: {err}");
@@ -325,6 +327,12 @@ impl GrokBotMonitor {
             .or(self.accounts.first())
     }
 
+    fn selected_config_dir(&self) -> Option<&std::path::Path> {
+        self.selected_chip()
+            .map(|c| c.config_dir.as_path())
+            .filter(|dir| !dir.as_os_str().is_empty())
+    }
+
     fn merge_fetches(&mut self, fetches: Vec<BotAccountFetch>) {
         if fetches.is_empty() {
             self.accounts = vec![AccountChip {
@@ -344,6 +352,9 @@ impl GrokBotMonitor {
             .map(|fetch| {
                 let mut chip = previous.remove(&fetch.id).unwrap_or_default();
                 chip.id = fetch.id;
+                if !fetch.config_dir.as_os_str().is_empty() {
+                    chip.config_dir = fetch.config_dir;
+                }
                 if fetch.identity.is_some() {
                     chip.identity = fetch.identity;
                 }

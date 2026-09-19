@@ -419,4 +419,18 @@ mod tests {
         let obj = serde_json::json!({"seconds": "1787843899", "nanos": 0});
         assert!(parse_timestamp(&obj).is_some());
     }
+
+    #[test]
+    fn weekly_pace_from_reset() {
+        use crate::pace::maybe_weekly_pace;
+        let json = include_bytes!("../../tests/fixtures/bot_usage.json");
+        let snap = parse_usage_json(json, None).unwrap();
+        let end = snap.resets_at.unwrap();
+        let mid = end - chrono::Duration::days(3) - chrono::Duration::hours(12);
+        let pace = maybe_weekly_pace(80.0, mid, None, snap.resets_at, Some("WEEKLY")).unwrap();
+        assert_eq!(
+            pace.popup_line(),
+            "Ahead of pace · 50% of week elapsed · ~160% at reset"
+        );
+    }
 }

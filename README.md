@@ -138,6 +138,7 @@ Click a chip for a popup with:
 - Plan name and account email
 - Usage bar (0–100, colored like the ring) and percent
 - Weekly or monthly reset time
+- Weekly pace (Build and Bot): on track / ahead / behind, how much of the week has elapsed, and a projected used percent at reset
 - How long ago usage was fetched
 - Live Grok CLI session count (from `~/.grok/active_sessions.json`)
 - **Open usage** (opens [grok.com usage](https://grok.com/?_s=usage))
@@ -164,9 +165,30 @@ accounts.
 
 Each signed-in Grok Bot account gets its own chip with that account’s email
 and weekly usage as a whole percent (or `n/a` on an enterprise pool). Click a
-chip for that account’s reset time, optional on-demand spend, whether any
+chip for that account’s reset time, weekly pace, optional on-demand spend, whether any
 discovered Grok Bot install is running, and up to three recently active bots
 (merged across those installs).
+
+### Weekly pace
+
+Build and Bot limits are weekly. The popup adds a short line such as
+`On track · 52% of week elapsed · ~44% at reset` so you can see whether the
+current used percent is in line with how far through the week you are.
+
+The even-burn line is “used % equals elapsed % of the week.” **On track** means
+those two numbers differ by 10 percentage points or less. More used than that is
+**ahead of pace** (burning hotter than an even week). Less is **behind pace**.
+The `~N% at reset` figure assumes a **constant burn from the period start**:
+projected used = current used % ÷ elapsed fraction of the week. A 50% used
+reading at 50% elapsed therefore projects 100% at reset; 80% used at 50% elapsed
+projects 160%.
+
+Build uses `currentPeriod.start` → `end` from the billing payload when present.
+Bot only publishes the next reset, so the start is inferred as reset minus 7
+days. Pace is hidden when the window is not weekly (Build monthly/daily) or on
+a Bot enterprise pool. API prepaid has no weekly quota window, so that applet
+has no pace line. Settings can hide the line; it is on by default for Build and
+Bot.
 
 Auth comes from every Grok Bot userData directory the applet can find:
 
@@ -249,6 +271,7 @@ Open the popup and choose **Settings**.
 | Sparkline on panel | on / off | off |
 | Percent on panel | on / off | on |
 | Amount on panel (API) | on / off | on |
+| Pace in popup (Build / Bot) | on / off | on |
 | Panel label | text | account email / API key name (per chip) |
 | Panel number | used / remaining | used |
 

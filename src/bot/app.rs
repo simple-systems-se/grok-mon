@@ -4,6 +4,7 @@ use super::usage::{BotAccountFetch, BotSnapshot, FetchError, fetch_all_bot_usage
 use crate::billing::{format_percent, format_remaining};
 use crate::chip::{self, PanelChip, panel_chip, usage_bar};
 use crate::config::{BOT_APP_ID, Config};
+use crate::pace::maybe_weekly_pace;
 use crate::ring::{RingIcon, usage_color, usage_ring};
 use chrono::Utc;
 use cosmic::app::Core;
@@ -88,6 +89,7 @@ pub enum Message {
     SetPoll(u64),
     ToggleSparkline(bool),
     TogglePercent(bool),
+    TogglePace(bool),
     SetRemaining(bool),
     SetLabel(String),
     ConfigChanged(Config),
@@ -256,6 +258,10 @@ impl cosmic::Application for GrokBotMonitor {
             }
             Message::TogglePercent(value) => {
                 self.config.show_percent = value;
+                self.save_config();
+            }
+            Message::TogglePace(value) => {
+                self.config.show_pace = value;
                 self.save_config();
             }
             Message::SetRemaining(value) => {
@@ -486,6 +492,20 @@ impl GrokBotMonitor {
             if let Some(end) = snapshot.resets_at {
                 col = col.push(padded(text::caption(format_remaining(end))));
             }
+
+            if self.config.show_pace
+                && !snapshot.enterprise
+                && let Some(pace) = maybe_weekly_pace(
+                    snapshot.percent,
+                    Utc::now(),
+                    None,
+                    snapshot.resets_at,
+                    Some("WEEKLY"),
+                )
+            {
+                col = col.push(padded(text::caption(pace.popup_line())));
+            }
+
             if let Some(trial) = snapshot.trial_expires_at {
                 col = col.push(padded(text::caption(format!(
                     "trial {}",
@@ -574,6 +594,11 @@ impl GrokBotMonitor {
             widget::toggler(self.config.show_percent).on_toggle(Message::TogglePercent),
         )));
 
+        col = col.push(padded(settings::item(
+            "Pace in popup",
+            widget::toggler(self.config.show_pace).on_toggle(Message::TogglePace),
+        )));
+
         col = col.push(padded(self.label_setting()));
 
         col = col.push(padded(text::body("Panel number")));
@@ -586,6 +611,9 @@ impl GrokBotMonitor {
 
         col = col.push(padded(text::caption(
             "Color by % used: green 0–50 · yellow 50–80 · orange 80–90 · red 90+",
+        )));
+        col = col.push(padded(text::caption(
+            "Pace: on track when used % is within 10 points of week elapsed. ~N% at reset assumes even burn from period start.",
         )));
 
         col = col.push(padded(text::caption(format!(

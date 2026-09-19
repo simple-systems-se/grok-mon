@@ -16,6 +16,7 @@ pub struct UsageSnapshot {
     pub used: Option<f64>,
     pub limit: Option<f64>,
     pub resets_at: Option<DateTime<Utc>>,
+    pub starts_at: Option<DateTime<Utc>>,
     pub period_type: Option<String>,
     pub plan: Option<String>,
     pub email: Option<String>,
@@ -58,6 +59,8 @@ struct CreditsConfig {
     credit_usage_percent: Option<f64>,
     #[serde(rename = "currentPeriod")]
     current_period: Option<CurrentPeriod>,
+    #[serde(rename = "billingPeriodStart")]
+    billing_period_start: Option<String>,
     #[serde(rename = "billingPeriodEnd")]
     billing_period_end: Option<String>,
     #[serde(rename = "onDemandCap")]
@@ -74,6 +77,7 @@ struct CreditsConfig {
 struct CurrentPeriod {
     #[serde(rename = "type")]
     period_type: Option<String>,
+    start: Option<String>,
     end: Option<String>,
 }
 
@@ -106,6 +110,13 @@ pub fn parse_credits_json(bytes: &[u8]) -> Result<UsageSnapshot, FetchError> {
         .as_ref()
         .and_then(|p| p.end.as_deref())
         .or(config.billing_period_end.as_deref())
+        .and_then(parse_rfc3339);
+
+    let starts_at = config
+        .current_period
+        .as_ref()
+        .and_then(|p| p.start.as_deref())
+        .or(config.billing_period_start.as_deref())
         .and_then(parse_rfc3339);
 
     let period_type = config
@@ -158,6 +169,7 @@ pub fn parse_credits_json(bytes: &[u8]) -> Result<UsageSnapshot, FetchError> {
         used,
         limit,
         resets_at,
+        starts_at,
         period_type,
         plan,
         email: None,
@@ -354,6 +366,8 @@ mod tests {
         let snap = parse_credits_json(json).unwrap();
         assert!((snap.percent - 2.0).abs() < f32::EPSILON);
         assert!(snap.resets_at.is_some());
+        assert!(snap.starts_at.is_some());
+        assert!(snap.starts_at < snap.resets_at);
         assert_eq!(period_label(snap.period_type.as_deref()), "Weekly");
     }
 
@@ -382,5 +396,26 @@ mod tests {
         assert_eq!(format_percent(2.0), "2%");
         assert_eq!(format_percent(2.4), "2%");
         assert_eq!(format_percent(23.4), "23%");
+    }
+
+    #[test]
+    fn weekly_pace_from_fixture() {
+        use crate::pace::maybe_weekly_pace;
+        let json = include_bytes!("../tests/fixtures/billing.json");
+        let snap = parse_credits_json(json).unwrap();
+        let start = snap.starts_at.unwrap();
+        let mid = start + chrono::Duration::days(3) + chrono::Duration::hours(12);
+        let pace = maybe_weekly_pace(
+            50.0,
+            mid,
+            snap.starts_at,
+            snap.resets_at,
+            snap.period_type.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(
+            pace.popup_line(),
+            "On track · 50% of week elapsed · ~100% at reset"
+        );
     }
 }

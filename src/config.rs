@@ -22,6 +22,8 @@ pub struct Config {
     pub show_percent: bool,
     #[serde(default)]
     pub show_remaining: bool,
+    #[serde(default = "default_true")]
+    pub show_pace: bool,
     #[serde(default)]
     pub account_labels: BTreeMap<String, String>,
 }
@@ -33,6 +35,7 @@ impl Default for Config {
             show_sparkline: false,
             show_percent: true,
             show_remaining: false,
+            show_pace: true,
             account_labels: BTreeMap::new(),
         }
     }
@@ -116,5 +119,10 @@ mod tests {
         assert_eq!(config.account_label("a"), None);
         config.set_account_label("a".into(), "   ".into());
         assert_eq!(config.account_label("a"), None);
+    }
+
+    #[test]
+    fn pace_defaults_on() {
+        assert!(Config::default().show_pace);
     }
 }

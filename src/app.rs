@@ -4,6 +4,7 @@ use crate::billing::{
 };
 use crate::chip::{self, PanelChip, panel_chip, usage_bar};
 use crate::config::{APP_ID, Config, USAGE_URL};
+use crate::pace::maybe_weekly_pace;
 use crate::ring::{RingIcon, usage_color, usage_ring};
 use crate::sessions::{LiveSessions, live_sessions};
 use chrono::Utc;
@@ -87,6 +88,7 @@ pub enum Message {
     SetPoll(u64),
     ToggleSparkline(bool),
     TogglePercent(bool),
+    TogglePace(bool),
     SetRemaining(bool),
     SetLabel(String),
     ConfigChanged(Config),
@@ -252,6 +254,10 @@ impl cosmic::Application for GrokMonitor {
             }
             Message::TogglePercent(value) => {
                 self.config.show_percent = value;
+                self.save_config();
+            }
+            Message::TogglePace(value) => {
+                self.config.show_pace = value;
                 self.save_config();
             }
             Message::SetRemaining(value) => {
@@ -473,6 +479,18 @@ impl GrokMonitor {
                 col = col.push(padded(text::caption(format_remaining(end))));
             }
 
+            if self.config.show_pace
+                && let Some(pace) = maybe_weekly_pace(
+                    snapshot.percent,
+                    Utc::now(),
+                    snapshot.starts_at,
+                    snapshot.resets_at,
+                    snapshot.period_type.as_deref(),
+                )
+            {
+                col = col.push(padded(text::caption(pace.popup_line())));
+            }
+
             let age = (Utc::now() - snapshot.fetched_at).num_seconds().max(0);
             col = col.push(padded(text::caption(format!("updated {age}s ago"))));
         }
@@ -558,6 +576,11 @@ impl GrokMonitor {
             widget::toggler(self.config.show_percent).on_toggle(Message::TogglePercent),
         )));
 
+        col = col.push(padded(settings::item(
+            "Pace in popup",
+            widget::toggler(self.config.show_pace).on_toggle(Message::TogglePace),
+        )));
+
         col = col.push(padded(self.label_setting()));
 
         col = col.push(padded(text::body("Panel number")));
@@ -570,6 +593,9 @@ impl GrokMonitor {
 
         col = col.push(padded(text::caption(
             "Color by % used: green 0–50 · yellow 50–80 · orange 80–90 · red 90+",
+        )));
+        col = col.push(padded(text::caption(
+            "Pace: on track when used % is within 10 points of week elapsed. ~N% at reset assumes even burn from period start.",
         )));
 
         col = col.push(padded(text::caption(format!(

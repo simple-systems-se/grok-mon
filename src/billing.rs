@@ -415,7 +415,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             pace.popup_line(),
-            "On track · 50% of week elapsed · ~100% at reset"
+            "Won't run out before reset · ~0% left at reset"
         );
     }
 }

@@ -428,9 +428,6 @@ mod tests {
         let end = snap.resets_at.unwrap();
         let mid = end - chrono::Duration::days(3) - chrono::Duration::hours(12);
         let pace = maybe_weekly_pace(80.0, mid, None, snap.resets_at, Some("WEEKLY")).unwrap();
-        assert_eq!(
-            pace.popup_line(),
-            "Ahead of pace · 50% of week elapsed · ~160% at reset"
-        );
+        assert_eq!(pace.popup_line(), "Will run out in 21h");
     }
 }

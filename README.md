@@ -138,7 +138,7 @@ Click a chip for a popup with:
 - Plan name and account email
 - Usage bar (0–100, colored like the ring) and percent
 - Weekly or monthly reset time
-- Weekly pace (Build and Bot): on track / ahead / behind, how much of the week has elapsed, and a projected used percent at reset
+- Weekly pace (Build and Bot): time until credits run out at the current burn, or how much is left at reset if they will last the week
 - How long ago usage was fetched
 - Live Grok CLI session count (from `~/.grok/active_sessions.json`)
 - **Open usage** (opens [grok.com usage](https://grok.com/?_s=usage))
@@ -171,24 +171,39 @@ discovered Grok Bot install is running, and up to three recently active bots
 
 ### Weekly pace
 
-Build and Bot limits are weekly. The popup adds a short line such as
-`On track · 52% of week elapsed · ~44% at reset` so you can see whether the
-current used percent is in line with how far through the week you are.
+Build and Bot limits are weekly. The popup adds a short line about when the
+remaining quota hits zero if the current burn continues:
 
-The even-burn line is “used % equals elapsed % of the week.” **On track** means
-those two numbers differ by 10 percentage points or less. More used than that is
-**ahead of pace** (burning hotter than an even week). Less is **behind pace**.
-The `~N% at reset` figure assumes a **constant burn from the period start**:
-projected used = current used % ÷ elapsed fraction of the week. A 50% used
-reading at 50% elapsed therefore projects 100% at reset; 80% used at 50% elapsed
-projects 160%.
+- `Will run out in 2d 4h` when that time is **before** the next reset
+- `Won't run out before reset · ~60% left at reset` when the quota lasts the week
+- `Week just started` early in the week, while usage is still too small to trust
+- `Out of credits` at 100% used, or `At limit` within half a percent of the cap
+- `Pace unavailable` when the window is marked weekly but start and end are unusable
+
+The burn rate is **constant from the period start**: used percent divided by
+how long the period has been open. Time to exhaustion is the remaining percent
+divided by that rate. The payload has no separate “since the last poll” rate,
+so this is the rate the applet can actually support. `~N% left` is the unused
+percent at reset under that same burn (`100 − used% / elapsed fraction`). A
+reading that is exactly even (`used %` equals elapsed % of the week) lands on
+`~0% left at reset`. An 80% used reading halfway through the week runs out in
+about 21 hours, not at reset.
+
+The line does not call a hot burn “on track.” The popup already has a separate
+reset countdown, so the pace line leads with exhaustion time when credits will
+not last the week.
+
+The first ~1% of the week (and any moment before the period opens) shows
+`Week just started` unless usage is already at least 5%. That avoids a huge or
+jumpy ETA from a tiny sample. A fast start that has already used 5% or more
+still reports `Will run out in …`.
 
 Build uses `currentPeriod.start` → `end` from the billing payload when present.
 Bot only publishes the next reset, so the start is inferred as reset minus 7
-days. Pace is hidden when the window is not weekly (Build monthly/daily) or on
-a Bot enterprise pool. API prepaid has no weekly quota window, so that applet
-has no pace line. Settings can hide the line; it is on by default for Build and
-Bot.
+days. Pace is hidden when there is no reset time, when the window is not weekly
+(Build monthly/daily), or on a Bot enterprise pool. API prepaid has no weekly
+quota window, so that applet has no pace line. Settings can hide the line; it
+is on by default for Build and Bot.
 
 Auth comes from every Grok Bot userData directory the applet can find:
 

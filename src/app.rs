@@ -595,7 +595,7 @@ impl GrokMonitor {
             "Color by % used: green 0–50 · yellow 50–80 · orange 80–90 · red 90+",
         )));
         col = col.push(padded(text::caption(
-            "Pace: on track when used % is within 10 points of week elapsed. ~N% at reset assumes even burn from period start.",
+            "Pace: time until credits hit zero at the burn rate since the period started.",
         )));
 
         col = col.push(padded(text::caption(format!(

@@ -30,6 +30,11 @@
     <content_attribute id="social-info">mild</content_attribute>
   </content_rating>
   <releases>
+    <release version="0.2.4" date="2026-10-01">
+      <description>
+        <p>Version bump to match the shared applet package.</p>
+      </description>
+    </release>
     <release version="0.2.3" date="2026-09-22">
       <description>
         <p>Report when weekly credits will run out in the Build popup.</p>

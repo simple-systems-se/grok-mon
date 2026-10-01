@@ -1,0 +1,21 @@
+{
+  "changes": [
+    {
+      "changeOrigin": "PURCHASE",
+      "topupStatus": "FAILED_TO_CHARGE",
+      "amount": { "val": "-10000" }
+    },
+    {
+      "changeOrigin": "PURCHASE",
+      "topupStatus": "SUCCEEDED",
+      "amount": { "val": "-10000" }
+    },
+    {
+      "changeOrigin": "SPEND",
+      "amount": { "val": "36" },
+      "billingCycle": { "year": 2026, "month": 8 },
+      "postedAt": "2026-09-12"
+    }
+  ],
+  "total": { "val": "-9964" }
+}

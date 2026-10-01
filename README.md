@@ -264,14 +264,19 @@ validation). Organization-scoped keys need `team_id` or `XAI_TEAM_ID`.
 Environment variables `XAI_MANAGEMENT_API_KEY` (or `XAI_MANAGEMENT_KEY`) and
 `XAI_TEAM_ID` override the file when the panel process has them.
 
-The applet computes live remaining as the posted prepaid ledger
-(`/v1/billing/teams/{team}/prepaid/balance`) minus current-period spend from
-the invoice preview (`/v1/billing/teams/{team}/postpaid/invoice/preview`).
-Spend is the largest of `prepaidCreditsUsed`, `totalWithCorr`, and invoice
-line amounts. The preview's `prepaidCredits` field can lag mid-cycle, so it
-is only used when the ledger is missing. Ledger amounts are inverted USD
-cents (`"-1000"` is $10 remaining). The applet never treats a missing total
-as $0.00.
+The applet computes live remaining as the lower of two figures when both
+exist: the posted prepaid ledger
+(`/v1/billing/teams/{team}/prepaid/balance`) minus current-period spend, and
+the invoice preview's `prepaidCredits`
+(`/v1/billing/teams/{team}/postpaid/invoice/preview`). Spend is the largest
+of `prepaidCreditsUsed`, `totalWithCorr`, and invoice line amounts. Mid-cycle,
+preview `prepaidCredits` can lag live spend, so posted minus spend is lower.
+At a billing-cycle change the previous invoice may not be posted to the
+ledger yet, while preview `prepaidCredits` already includes that spend and
+`prepaidCreditsUsed` is still zero, so the preview figure is lower. When the
+ledger is missing, preview remaining is the fallback. Ledger amounts are
+inverted USD cents (`"-1000"` is $10 remaining). The applet never treats a
+missing total as $0.00.
 
 If you see `—`, the Management API key is missing or rejected. Inference keys
 (`XAI_API_KEY`) are not accepted.

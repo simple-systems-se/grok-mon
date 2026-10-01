@@ -149,19 +149,27 @@ fn parse_balance(bytes: &[u8]) -> Result<i64, FetchError> {
     Ok(remaining_cents_from_ledger(val))
 }
 
-/// Live remaining is posted prepaid ledger minus current-period spend.
+/// Live remaining is the lower of `posted - used` and preview remaining
+/// when both exist.
 ///
-/// `prepaidCredits` on the invoice preview can lag behind live spend. The
-/// posted ledger does not deduct mid-cycle either, so remaining is
-/// `posted - used` when both are present. Preview remaining is only a
-/// fallback when the ledger is missing.
+/// Mid-cycle, `prepaidCredits` on the invoice preview can lag behind live
+/// spend, so `posted - used` is the lower figure. At a billing-cycle change
+/// the previous month's invoice may not be posted to the prepaid ledger yet.
+/// Preview `prepaidCredits` already includes that unposted spend while
+/// `prepaidCreditsUsed` is still zero, so preview remaining is lower.
+/// A posted ledger with no current spend uses preview remaining when present,
+/// otherwise the posted total. A missing ledger uses preview remaining, or
+/// errors when that is missing too.
 pub fn live_remaining_cents(
     posted: Option<i64>,
     preview_remaining: Option<i64>,
     used: Option<i64>,
 ) -> Result<i64, FetchError> {
     match (posted, used) {
-        (Some(posted), Some(used)) => Ok(posted - used),
+        (Some(posted), Some(used)) => {
+            let from_posted = posted - used;
+            Ok(preview_remaining.map_or(from_posted, |preview| from_posted.min(preview)))
+        }
         (Some(posted), None) => Ok(preview_remaining.unwrap_or(posted)),
         (None, _) => preview_remaining
             .ok_or_else(|| FetchError::Parse("no prepaid remaining in billing response".into())),
@@ -473,6 +481,32 @@ mod tests {
         );
         assert_eq!(live_remaining_cents(Some(1234), None, None).unwrap(), 1234);
         assert!(live_remaining_cents(None, None, Some(220)).is_err());
+    }
+
+    #[test]
+    fn live_remaining_uses_lower_of_posted_minus_used_and_preview() {
+        // Unposted prior invoice: preview remaining is below posted - used.
+        assert_eq!(
+            live_remaining_cents(Some(9964), Some(8933), Some(0)).unwrap(),
+            8933
+        );
+        // Mid-cycle lag: posted - used is below preview remaining.
+        assert_eq!(
+            live_remaining_cents(Some(10_000), Some(9964), Some(220)).unwrap(),
+            9780
+        );
+    }
+
+    #[test]
+    fn unposted_invoice_uses_lower_preview_remaining() {
+        let validation = include_bytes!("../../tests/fixtures/api_validation.json");
+        let balance = include_bytes!("../../tests/fixtures/api_balance_unposted.json");
+        let preview = include_bytes!("../../tests/fixtures/api_preview_new_cycle.json");
+        let snap = parse_snapshot(validation, Some(balance), Some(preview), None, None).unwrap();
+        // Ledger still shows $99.64. October preview prepaidCredits is $89.33
+        // and prepaidCreditsUsed is 0 because September is not posted yet.
+        assert_eq!(snap.remaining_cents, 8933);
+        assert_eq!(format_usd(snap.remaining_cents), "$89.33");
     }
 
     #[test]

@@ -1,0 +1,19 @@
+{
+  "coreInvoice": {
+    "lines": [],
+    "amountBeforeVat": "0",
+    "vatCost": "0",
+    "amountAfterVat": "0",
+    "autoCreditsIssued": "0",
+    "defaultCreditsIssued": "0",
+    "totalWithCorr": { "val": "0" },
+    "prepaidCredits": { "val": "-8933" },
+    "prepaidCreditsUsed": { "val": "0" }
+  },
+  "effectiveSpendingLimit": "0",
+  "defaultCredits": "0",
+  "billingCycle": {
+    "year": 2026,
+    "month": 10
+  }
+}

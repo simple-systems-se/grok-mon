@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Grok Bot Monitor
-Comment=Show Grok Bot weekly usage in the COSMIC panel
+Comment=Retired. Remove from the panel. Usage is on Grok Monitor.
 Exec=cosmic-ext-applet-grok-monitor --product=bot
 Terminal=false
 Type=Application

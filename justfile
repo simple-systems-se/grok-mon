@@ -67,8 +67,10 @@ install-user: build-release
     install -Dm0644 {{metainfo-src}} {{metainfo-dst}}
     install -Dm0644 {{bot-metainfo-src}} {{bot-metainfo-dst}}
     install -Dm0644 {{api-metainfo-src}} {{api-metainfo-dst}}
-    @echo "Installed to ~/.local. Add “Grok Monitor”, “Grok Bot Monitor”, or “Grok API Monitor” in COSMIC Settings → Desktop → Panel → Applets."
-    @echo "If they do not appear, run: pkill cosmic-panel"
+    @echo "Installed for this user under ~/.local. This does not change other accounts."
+    @echo "Add “Grok Monitor” or “Grok API Monitor” in COSMIC Settings → Desktop → Panel → Applets."
+    @echo "Remove “Grok Bot Monitor” if it is still on the panel. Usage for each account is on Grok Monitor."
+    @echo "If an applet does not appear, run: pkill cosmic-panel"
 
 uninstall-user:
     rm -f {{bin-dst}} {{desktop-dst}} {{icon-dst}} {{icon-symbolic-dst}} {{metainfo-dst}} \

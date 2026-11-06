@@ -1,17 +1,18 @@
 # Security
 
-Grok Monitor reads the Grok CLI session under `~/.grok`. Grok Bot Monitor
-decrypts each discovered Grok Bot desktop session (`sand-secrets.json` under
-`~/.config/Grok Bot*` and optional `GROK_BOT_CONFIG_DIRS`, the Chromium v10
-OSCrypt password, and the login keyring item for `application=` that
-directory’s name — then `application=Grok Bot` — when the file is v11) and
-calls Cursor usage endpoints with that token. Grok API Monitor reads a
+Grok Monitor reads the Grok CLI session under `~/.grok` and sends that bearer
+only to `https://cli-chat-proxy.grok.com`. It may also decrypt Grok Bot
+`sand-secrets.json` (under `~/.config/Grok Bot*` and optional
+`GROK_BOT_CONFIG_DIRS`) far enough to read which account is the work profile
+and which is personal. Those tokens are dropped and are not sent to Cursor.
+The retired Grok Bot Monitor slot does not poll. Grok API Monitor reads a
 Management API key from `~/.config/grok-mon-api/credentials.json` and/or
 `XAI_MANAGEMENT_API_KEY` and calls xAI’s Management API billing endpoints.
+That prepaid path is unchanged.
 
 None of the applets write credentials. Tokens are not logged. The Authorization
-header and Bot checksum header are marked sensitive so HTTP debug traces redact
-them. In-memory secrets are zeroized when dropped.
+header is marked sensitive so HTTP debug traces redact it. In-memory secrets
+are zeroized when dropped.
 
 ## Reporting a vulnerability
 

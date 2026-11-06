@@ -1,10 +1,10 @@
 [package]
 name = "cosmic-ext-applet-grok-monitor"
-version = "0.2.4"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 license = "Unlicense"
-description = "COSMIC panel applets that show Grok Build, Grok Bot, and xAI API credit usage"
+description = "COSMIC panel applets that show shared Grok usage per account and xAI API prepaid credit"
 repository = "https://github.com/simple-systems-se/grok-mon"
 homepage = "https://github.com/simple-systems-se/grok-mon"
 readme = "README.md"
@@ -29,7 +29,6 @@ sha1 = "0.10"
 tokio = { version = "1", default-features = false, features = ["macros", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-uuid = { version = "1", features = ["v4"] }
 zeroize = { version = "1", features = ["alloc"] }
 
 [dependencies.libcosmic]

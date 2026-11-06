@@ -1,19 +1,12 @@
-use super::secrets::{AuthError, load_accounts};
-use crate::chip::display_identity;
+use super::secrets::AuthError;
 use chrono::{DateTime, Utc};
-use futures_util::future::join_all;
 use serde_json::Value;
-use zeroize::Zeroize;
 
-const BACKEND_URL: &str = "https://api2.cursor.sh";
-const USAGE_PATH: &str = "/aiserver.v1.DashboardService/GetSandUsageStatus";
-const PERIOD_PATH: &str = "/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
-const USER_AGENT: &str = "cosmic-ext-applet-grok-monitor-bot";
+#[cfg_attr(not(test), allow(dead_code))]
 const NO_LIMIT_SENTINEL_CENTS: f64 = 2_147_483_647.0;
 
 #[derive(Debug, Clone)]
 pub struct BotSnapshot {
-    pub account_id: String,
     pub percent: f32,
     pub enterprise: bool,
     pub used_cents: Option<f64>,
@@ -26,17 +19,9 @@ pub struct BotSnapshot {
 }
 
 #[derive(Debug, Clone)]
-pub struct BotAccountFetch {
-    pub id: String,
-    pub identity: Option<String>,
-    pub config_dir: std::path::PathBuf,
-    pub result: Result<BotSnapshot, FetchError>,
-}
-
-#[derive(Debug, Clone)]
 pub enum FetchError {
     Auth(AuthError),
-    Http(String),
+    #[cfg_attr(not(test), allow(dead_code))]
     Parse(String),
 }
 
@@ -44,11 +29,12 @@ impl std::fmt::Display for FetchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Auth(e) => write!(f, "{e}"),
-            Self::Http(e) | Self::Parse(e) => write!(f, "{e}"),
+            Self::Parse(e) => write!(f, "{e}"),
         }
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn parse_usage_json(
     status_bytes: &[u8],
     period_bytes: Option<&[u8]>,
@@ -100,7 +86,6 @@ pub fn parse_usage_json(
         .map(str::to_string);
 
     Ok(BotSnapshot {
-        account_id: String::new(),
         percent,
         enterprise,
         used_cents,
@@ -113,6 +98,7 @@ pub fn parse_usage_json(
     })
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn parse_ondemand(period: &Value) -> Option<(f64, f64)> {
     let spend = field_value(period, "spendLimitUsage", "spend_limit_usage")?;
     let limit = field_value(spend, "individualLimit", "individual_limit").and_then(json_f64)?;
@@ -125,6 +111,7 @@ fn parse_ondemand(period: &Value) -> Option<(f64, f64)> {
     Some((used, limit))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn field<'a>(
     obj: &'a serde_json::Map<String, Value>,
     camel: &str,
@@ -133,10 +120,12 @@ fn field<'a>(
     obj.get(camel).or_else(|| obj.get(snake))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn field_value<'a>(value: &'a Value, camel: &str, snake: &str) -> Option<&'a Value> {
     value.as_object().and_then(|o| field(o, camel, snake))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn json_f64(value: &Value) -> Option<f64> {
     match value {
         Value::Number(n) => n.as_f64(),
@@ -145,6 +134,7 @@ fn json_f64(value: &Value) -> Option<f64> {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn parse_timestamp(value: &Value) -> Option<DateTime<Utc>> {
     match value {
         Value::String(s) => DateTime::parse_from_rfc3339(s)
@@ -167,6 +157,7 @@ fn parse_timestamp(value: &Value) -> Option<DateTime<Utc>> {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn clamp_percent(p: f32) -> f32 {
     if !p.is_finite() {
         0.0
@@ -175,6 +166,7 @@ fn clamp_percent(p: f32) -> f32 {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn create_cursor_checksum(machine_id: &str, now_ms: u128) -> String {
     let unix_kilo_seconds = now_ms / 1_000_000;
     let mut bytes = [
@@ -194,174 +186,6 @@ pub fn create_cursor_checksum(machine_id: &str, now_ms: u128) -> String {
         "{}{machine_id}",
         data_encoding::BASE64URL_NOPAD.encode(&bytes)
     )
-}
-
-fn http_client() -> Result<reqwest::Client, FetchError> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .user_agent(USER_AGENT)
-        .https_only(true)
-        .redirect(reqwest::redirect::Policy::limited(3))
-        .build()
-        .map_err(|e| FetchError::Http(e.to_string()))
-}
-
-fn connect_headers(
-    token: &str,
-    machine_id: &str,
-    client_version: &str,
-) -> Result<reqwest::header::HeaderMap, FetchError> {
-    use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
-    let mut headers = HeaderMap::new();
-    let mut authorization = HeaderValue::from_str(&format!("Bearer {token}"))
-        .map_err(|_| FetchError::Auth(AuthError::Invalid))?;
-    authorization.set_sensitive(true);
-    headers.insert(AUTHORIZATION, authorization);
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert("Connect-Protocol-Version", HeaderValue::from_static("1"));
-    let checksum = create_cursor_checksum(
-        machine_id,
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0),
-    );
-    let mut checksum_header =
-        HeaderValue::from_str(&checksum).map_err(|_| FetchError::Auth(AuthError::Invalid))?;
-    checksum_header.set_sensitive(true);
-    headers.insert("x-cursor-checksum", checksum_header);
-    headers.insert("x-cursor-client-type", HeaderValue::from_static("sand"));
-    headers.insert(
-        "x-cursor-client-version",
-        HeaderValue::from_str(client_version)
-            .unwrap_or_else(|_| HeaderValue::from_static("0.16.0")),
-    );
-    headers.insert("x-sand-box-namespace", HeaderValue::from_static("prod"));
-    headers.insert("x-ghost-mode", HeaderValue::from_static("true"));
-    let request_id = uuid::Uuid::new_v4().to_string();
-    headers.insert(
-        "x-request-id",
-        HeaderValue::from_str(&request_id).unwrap_or(HeaderValue::from_static("grok-mon-bot")),
-    );
-    Ok(headers)
-}
-
-async fn post_connect(
-    client: &reqwest::Client,
-    headers: reqwest::header::HeaderMap,
-    path: &str,
-) -> Result<Vec<u8>, FetchError> {
-    let url = format!("{BACKEND_URL}{path}");
-    let response = client
-        .post(url)
-        .headers(headers)
-        .body("{}")
-        .send()
-        .await
-        .map_err(|e| FetchError::Http(e.to_string()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .await
-        .map_err(|e| FetchError::Http(e.to_string()))?;
-    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        return Err(FetchError::Auth(AuthError::Expired));
-    }
-    if !status.is_success() {
-        return Err(FetchError::Http(format!("cursor HTTP {status}")));
-    }
-    Ok(body.to_vec())
-}
-
-pub async fn fetch_all_bot_usage() -> Result<Vec<BotAccountFetch>, FetchError> {
-    let accounts = load_accounts().await.map_err(FetchError::Auth)?;
-    let client = http_client()?;
-    let jobs: Vec<_> = accounts
-        .iter()
-        .map(|account| {
-            let version = super::secrets::client_version_from_marker(
-                &super::roots::session_marker_path(&account.config_dir),
-            );
-            (
-                account.id.clone(),
-                account.identity.email.clone(),
-                account.identity.name.clone(),
-                account.token.clone(),
-                account.machine_id.clone(),
-                account.error.clone(),
-                account.config_dir.clone(),
-                version,
-            )
-        })
-        .collect();
-    let fetches = jobs.into_iter().map(
-        |(id, email, name, token, machine_id, error, config_dir, version)| {
-            let client = client.clone();
-            async move {
-                let identity = display_identity(email.as_deref(), name.as_deref());
-                let result = match token {
-                    Some(mut token) => {
-                        let fetched = tokio::time::timeout(
-                            std::time::Duration::from_secs(20),
-                            fetch_bot_account(&client, &token, &machine_id, &version),
-                        )
-                        .await
-                        .unwrap_or_else(|_| Err(FetchError::Http("cursor usage timed out".into())));
-                        token.zeroize();
-                        fetched
-                    }
-                    None => Err(FetchError::Auth(error.unwrap_or(AuthError::Expired))),
-                };
-                let result = result.map(|mut snapshot| {
-                    snapshot.account_id = id.clone();
-                    if snapshot.email.is_none() {
-                        snapshot.email = email.clone();
-                    }
-                    tracing::info!(
-                        account = %id,
-                        percent = snapshot.percent,
-                        "fetched Grok Bot usage"
-                    );
-                    snapshot
-                });
-                BotAccountFetch {
-                    id,
-                    identity,
-                    config_dir,
-                    result,
-                }
-            }
-        },
-    );
-    Ok(join_all(fetches).await)
-}
-
-async fn fetch_bot_account(
-    client: &reqwest::Client,
-    token: &str,
-    machine_id: &str,
-    version: &str,
-) -> Result<BotSnapshot, FetchError> {
-    let status_body = post_connect(
-        client,
-        connect_headers(token, machine_id, version)?,
-        USAGE_PATH,
-    )
-    .await?;
-    let period_body = match post_connect(
-        client,
-        connect_headers(token, machine_id, version)?,
-        PERIOD_PATH,
-    )
-    .await
-    {
-        Ok(body) => Some(body),
-        Err(err) => {
-            tracing::debug!("on-demand usage skipped: {err}");
-            None
-        }
-    };
-    parse_usage_json(&status_body, period_body.as_deref())
 }
 
 #[cfg(test)]

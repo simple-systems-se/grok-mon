@@ -81,6 +81,7 @@ pub struct CursorAccount {
     pub identity: Identity,
     pub token: Option<String>,
     pub machine_id: String,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub error: Option<AuthError>,
     pub config_dir: PathBuf,
     pub used_at: Option<SystemTime>,
@@ -807,20 +808,6 @@ async fn secrets_from_search(
         return Err(AuthError::Keyring);
     }
     Ok(passwords)
-}
-
-pub fn client_version_from_marker(path: &Path) -> String {
-    #[derive(Deserialize)]
-    struct Marker {
-        #[serde(rename = "appVersion")]
-        app_version: Option<String>,
-    }
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<Marker>(&raw).ok())
-        .and_then(|m| m.app_version)
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "0.16.0".into())
 }
 
 #[cfg(test)]

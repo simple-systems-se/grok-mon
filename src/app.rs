@@ -1,9 +1,10 @@
+use crate::accounts::{self, AccountRole};
 use crate::billing::{
     BuildAccountFetch, FetchError, UsageSnapshot, fetch_all_usage, format_percent,
     format_remaining, period_label,
 };
 use crate::chip::{self, PanelChip, panel_chip, usage_bar};
-use crate::config::{APP_ID, Config, USAGE_URL};
+use crate::config::{APP_ID, BOT_APP_ID, Config, USAGE_URL};
 use crate::pace::maybe_weekly_pace;
 use crate::ring::{RingIcon, usage_color, usage_ring};
 use crate::sessions::{LiveSessions, live_sessions};
@@ -33,7 +34,9 @@ enum Page {
 #[derive(Default)]
 struct AccountChip {
     id: String,
+    aliases: Vec<String>,
     identity: Option<String>,
+    role: AccountRole,
     snapshot: Option<UsageSnapshot>,
     error: Option<FetchError>,
     history: VecDeque<f32>,
@@ -111,13 +114,19 @@ impl cosmic::Application for GrokMonitor {
 
     fn init(core: Core, _flags: Self::Flags) -> (Self, Task<cosmic::Action<Self::Message>>) {
         let config_handler = cosmic_config::Config::new(Self::APP_ID, Config::VERSION).ok();
-        let config = config_handler
+        let mut config = config_handler
             .as_ref()
             .map(|ctx| match Config::get_entry(ctx) {
                 Ok(config) => config,
                 Err((_errors, config)) => config,
             })
             .unwrap_or_default();
+        if accounts::import_and_migrate_labels(&mut config.account_labels, &bot_config_labels())
+            && let Some(handler) = &config_handler
+            && let Err(err) = config.write_entry(handler)
+        {
+            tracing::error!("failed to save migrated account labels: {err}");
+        }
 
         let app = Self {
             core,
@@ -267,12 +276,20 @@ impl cosmic::Application for GrokMonitor {
             Message::SetLabel(value) => {
                 let id = self.label_account_id();
                 if !id.is_empty() {
+                    let value = accounts::canonical_label_alias(&value)
+                        .map(str::to_string)
+                        .unwrap_or(value);
                     self.config.set_account_label(id, value);
                     self.save_config();
                 }
             }
-            Message::ConfigChanged(config) => {
-                self.config = config;
+            Message::ConfigChanged(mut config) => {
+                if accounts::migrate_label_values(&mut config.account_labels) {
+                    self.config = config;
+                    self.save_config();
+                } else {
+                    self.config = config;
+                }
             }
         }
         Task::none()
@@ -348,6 +365,8 @@ impl GrokMonitor {
             .map(|fetch| {
                 let mut chip = previous.remove(&fetch.id).unwrap_or_default();
                 chip.id = fetch.id;
+                chip.aliases = fetch.aliases;
+                chip.role = fetch.role;
                 if fetch.identity.is_some() {
                     chip.identity = fetch.identity;
                 }
@@ -374,6 +393,7 @@ impl GrokMonitor {
                 chip
             })
             .collect();
+        self.sync_labels();
         if self
             .selected
             .as_ref()
@@ -442,19 +462,26 @@ impl GrokMonitor {
         let snapshot = chip.and_then(|c| c.snapshot.as_ref());
         let error = chip.and_then(|c| c.error.as_ref());
 
-        let title = snapshot
-            .and_then(|s| s.plan.as_deref())
-            .unwrap_or("Grok Build");
+        let title = snapshot.and_then(|s| s.plan.as_deref()).unwrap_or(
+            if snapshot.is_some_and(|s| s.unified) {
+                "Grok"
+            } else {
+                "Grok Build"
+            },
+        );
         let email = snapshot
             .and_then(|s| s.email.as_deref())
             .or_else(|| chip.and_then(|c| c.identity.as_deref()))
+            .filter(|value| !is_panel_label(value))
             .unwrap_or("");
 
-        col = col.push(padded(
-            column::with_capacity(2)
-                .push(text::title4(title))
-                .push(text::caption(email)),
-        ));
+        let mut heading = column::with_capacity(3)
+            .push(text::title4(title))
+            .push(text::caption(email));
+        if snapshot.is_some_and(|s| s.unified) {
+            heading = heading.push(text::caption("Shared weekly pool"));
+        }
+        col = col.push(padded(heading));
 
         col = col.push(padded(divider::horizontal::default()));
 
@@ -597,6 +624,9 @@ impl GrokMonitor {
         col = col.push(padded(text::caption(
             "Pace: time until credits hit zero at the burn rate since the period started.",
         )));
+        col = col.push(padded(text::caption(
+            "One chip per account. The percent is the shared weekly pool, not Build plus Bot.",
+        )));
 
         col = col.push(padded(text::caption(format!(
             "Grok Monitor {}",
@@ -604,6 +634,35 @@ impl GrokMonitor {
         ))));
 
         col.into()
+    }
+
+    fn sync_labels(&mut self) {
+        let views: Vec<_> = self
+            .accounts
+            .iter()
+            .filter(|chip| !chip.id.is_empty())
+            .map(|chip| accounts::AccountView {
+                id: chip.id.clone(),
+                aliases: chip.aliases.clone(),
+                email: chip
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.email.clone())
+                    .or_else(|| chip.identity.clone()),
+                role: chip.role,
+            })
+            .collect();
+        if views.is_empty() {
+            return;
+        }
+        let updates = accounts::label_updates(&self.config.account_labels, &views);
+        if updates.is_empty() {
+            return;
+        }
+        for update in updates {
+            self.config.set_account_label(update.id, update.label);
+        }
+        self.save_config();
     }
 
     fn label_account_id(&self) -> String {
@@ -642,10 +701,27 @@ impl GrokMonitor {
             .push(text::body("Panel label"))
             .push(input)
             .push(text::caption(format!(
-                "Shown on the panel chip. Empty uses {auto}."
+                "Shown on the panel chip. Empty uses {auto}. A work profile defaults to sim sys, a personal profile to pers."
             )))
             .spacing(8)
             .into()
+    }
+}
+
+fn is_panel_label(value: &str) -> bool {
+    matches!(
+        accounts::role_from_label(value),
+        AccountRole::Work | AccountRole::Personal
+    ) && !value.contains('@')
+}
+
+fn bot_config_labels() -> std::collections::BTreeMap<String, String> {
+    let Ok(ctx) = cosmic_config::Config::new(BOT_APP_ID, Config::VERSION) else {
+        return std::collections::BTreeMap::new();
+    };
+    match Config::get_entry(&ctx) {
+        Ok(config) => config.account_labels,
+        Err((_errors, config)) => config.account_labels,
     }
 }
 

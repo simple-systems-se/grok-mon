@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>io.github.simple-systems-se.grok-mon</id>
   <name>Grok Monitor</name>
-  <summary>Grok Build credit usage in the COSMIC panel</summary>
+  <summary>Shared Grok usage, once per account, in the COSMIC panel</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>Unlicense</project_license>
   <developer id="io.github.simple-systems-se">
@@ -10,8 +10,8 @@
   </developer>
   <description>
     <p>
-      A panel applet for the COSMIC™ desktop that shows current Grok Build
-      credit usage, matching the /usage view in the Grok CLI.
+      A panel applet for the COSMIC™ desktop that shows the shared weekly Grok
+      usage pool once per account. Grok Build and Grok Bot draw from that pool.
     </p>
     <p>
       This unofficial applet reads the Grok CLI session on disk (read-only)
@@ -30,6 +30,15 @@
     <content_attribute id="social-info">mild</content_attribute>
   </content_rating>
   <releases>
+    <release version="0.3.0" date="2026-11-06">
+      <description>
+        <p>
+          Show the shared weekly pool once per account. The work account is
+          labeled sim sys and the personal account is labeled pers. Remove the
+          retired Grok Bot Monitor applet from the panel.
+        </p>
+      </description>
+    </release>
     <release version="0.2.4" date="2026-10-01">
       <description>
         <p>Version bump to match the shared applet package.</p>

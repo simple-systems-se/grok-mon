@@ -1,6 +1,6 @@
 use super::launch;
 use super::roster::{BotRoster, live_roster};
-use super::usage::{BotAccountFetch, BotSnapshot, FetchError, fetch_all_bot_usage};
+use super::usage::{BotSnapshot, FetchError};
 use crate::billing::{format_percent, format_remaining};
 use crate::chip::{self, PanelChip, panel_chip, usage_bar};
 use crate::config::{BOT_APP_ID, Config};
@@ -22,7 +22,7 @@ use std::sync::LazyLock;
 
 static PANEL_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("grok-bot-monitor-panel"));
 
-const HISTORY_LEN: usize = 24;
+const RETIRED_ID: &str = "retired";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -51,8 +51,6 @@ pub struct GrokBotMonitor {
     page: Page,
     size: Size,
     open_error: Option<String>,
-    fetching: bool,
-    fetch_started: Option<std::time::Instant>,
 }
 
 impl Default for GrokBotMonitor {
@@ -68,8 +66,6 @@ impl Default for GrokBotMonitor {
             page: Page::Overview,
             size: Size::new(10.0, 10.0),
             open_error: None,
-            fetching: false,
-            fetch_started: None,
         }
     }
 }
@@ -81,7 +77,6 @@ pub enum Message {
     TogglePopup(String),
     PopupClosed(Id),
     Size(Size),
-    UsageFetched(Result<Vec<BotAccountFetch>, FetchError>),
     OpenApp,
     CopyPercent,
     ShowSettings,
@@ -168,39 +163,9 @@ impl cosmic::Application for GrokBotMonitor {
     fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
         match message {
             Message::Tick => {
-                self.live = live_roster();
-                if self.fetching {
-                    if self
-                        .fetch_started
-                        .is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(30))
-                    {
-                        tracing::warn!("bot usage fetch still running after 30s; retrying");
-                        self.fetching = false;
-                    } else {
-                        return Task::none();
-                    }
-                }
-                self.fetching = true;
-                self.fetch_started = Some(std::time::Instant::now());
-                return Task::perform(fetch_all_bot_usage(), |result| {
-                    cosmic::action::Action::App(Message::UsageFetched(result))
-                });
+                self.install_retired();
             }
             Message::Clock => {}
-            Message::UsageFetched(result) => {
-                self.fetching = false;
-                self.fetch_started = None;
-                match result {
-                    Ok(fetches) => self.merge_fetches(fetches),
-                    Err(err) => {
-                        self.accounts = vec![AccountChip {
-                            error: Some(err),
-                            ..AccountChip::default()
-                        }];
-                        self.selected = None;
-                    }
-                }
-            }
             Message::TogglePopup(account_id) => {
                 if self.popup.is_some() && self.selected.as_ref() == Some(&account_id) {
                     if let Some(id) = self.popup.take() {
@@ -318,6 +283,23 @@ impl cosmic::Application for GrokBotMonitor {
 }
 
 impl GrokBotMonitor {
+    fn install_retired(&mut self) {
+        if self
+            .accounts
+            .first()
+            .is_some_and(|chip| chip.id == RETIRED_ID)
+        {
+            return;
+        }
+        self.accounts = vec![AccountChip {
+            id: RETIRED_ID.into(),
+            identity: Some("remove".into()),
+            error: Some(FetchError::Auth(super::secrets::AuthError::Missing)),
+            ..AccountChip::default()
+        }];
+        self.selected = Some(RETIRED_ID.into());
+    }
+
     fn save_config(&mut self) {
         if let Some(handler) = &self.config_handler
             && let Err(e) = self.config.write_entry(handler)
@@ -337,63 +319,6 @@ impl GrokBotMonitor {
         self.selected_chip()
             .map(|c| c.config_dir.as_path())
             .filter(|dir| !dir.as_os_str().is_empty())
-    }
-
-    fn merge_fetches(&mut self, fetches: Vec<BotAccountFetch>) {
-        if fetches.is_empty() {
-            self.accounts = vec![AccountChip {
-                error: Some(FetchError::Auth(super::secrets::AuthError::Missing)),
-                ..AccountChip::default()
-            }];
-            self.selected = None;
-            return;
-        }
-        let mut previous: std::collections::HashMap<String, AccountChip> =
-            std::mem::take(&mut self.accounts)
-                .into_iter()
-                .map(|chip| (chip.id.clone(), chip))
-                .collect();
-        self.accounts = fetches
-            .into_iter()
-            .map(|fetch| {
-                let mut chip = previous.remove(&fetch.id).unwrap_or_default();
-                chip.id = fetch.id;
-                if !fetch.config_dir.as_os_str().is_empty() {
-                    chip.config_dir = fetch.config_dir;
-                }
-                if fetch.identity.is_some() {
-                    chip.identity = fetch.identity;
-                }
-                match fetch.result {
-                    Ok(snapshot) => {
-                        chip.error = None;
-                        if chip.history.len() == HISTORY_LEN {
-                            chip.history.pop_front();
-                        }
-                        chip.history.push_back(snapshot.percent);
-                        if chip.identity.is_none() {
-                            chip.identity = snapshot.email.clone();
-                        }
-                        chip.snapshot = Some(snapshot);
-                    }
-                    Err(err) => {
-                        if matches!(err, FetchError::Auth(_)) {
-                            chip.snapshot = None;
-                            chip.history.clear();
-                        }
-                        chip.error = Some(err);
-                    }
-                }
-                chip
-            })
-            .collect();
-        if self
-            .selected
-            .as_ref()
-            .is_none_or(|id| !self.accounts.iter().any(|c| &c.id == id))
-        {
-            self.selected = self.accounts.first().map(|c| c.id.clone());
-        }
     }
 
     fn open_popup(&mut self) -> Task<cosmic::Action<Message>> {
@@ -452,6 +377,13 @@ impl GrokBotMonitor {
     }
 
     fn overview(&self) -> Element<'_, Message> {
+        if self
+            .accounts
+            .first()
+            .is_some_and(|chip| chip.id == RETIRED_ID)
+        {
+            return self.retired_overview();
+        }
         let mut col = column::with_capacity(14).padding([12, 0]).spacing(8);
         let chip = self.selected_chip();
         let snapshot = chip.and_then(|c| c.snapshot.as_ref());
@@ -568,6 +500,26 @@ impl GrokBotMonitor {
         ));
 
         col.into()
+    }
+
+    fn retired_overview(&self) -> Element<'_, Message> {
+        column::with_capacity(6)
+            .padding([12, 0])
+            .spacing(8)
+            .push(padded(text::title4("Grok Bot Monitor")))
+            .push(padded(text::body(
+                "This applet no longer reads usage. Grok Build and Grok Bot share one weekly pool, shown once per account on Grok Monitor.",
+            )))
+            .push(padded(text::body(
+                "The work account is labeled sim sys. The personal account is labeled pers.",
+            )))
+            .push(padded(text::caption(
+                "Remove this applet: COSMIC Settings → Desktop → Panel → Applets. Select Grok Bot Monitor and remove it. The package does not change your panel layout.",
+            )))
+            .push(padded(text::caption(
+                "Grok API Monitor is unchanged.",
+            )))
+            .into()
     }
 
     fn settings_page(&self) -> Element<'_, Message> {

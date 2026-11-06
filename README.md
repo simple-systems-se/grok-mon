@@ -1,10 +1,17 @@
 # Grok Monitor
 
-A panel applet for the [COSMIC™](https://github.com/pop-os/cosmic-epoch) desktop that shows current
-Grok Build credit usage. It uses the same billing endpoint as `/usage` in the
-Grok CLI. A second applet, **Grok Bot Monitor**, shows Grok Bot weekly usage
-from the Grok Bot desktop app. A third applet, **Grok API Monitor**, shows
+A panel applet for the [COSMIC™](https://github.com/pop-os/cosmic-epoch) desktop that shows the
+shared weekly Grok usage pool **once per account**. Grok Build and Grok Bot draw
+from that pool on current xAI plans, so a second Bot meter would count the same
+usage again. The chip uses the same billing endpoint as `/usage` in the Grok
+CLI (`creditUsagePercent`). A separate applet, **Grok API Monitor**, still shows
 remaining prepaid dollars for xAI API tokens.
+
+The work account is labeled **sim sys**. The personal account is labeled **pers**.
+
+**Grok Bot Monitor** is a retired panel slot. It no longer polls usage. Remove
+it from the panel after updating (see below). That step is done in COSMIC
+Settings; the package does not edit the panel layout.
 
 This is an unofficial community project. It is not affiliated with, endorsed by,
 or supported by xAI or Cursor.
@@ -19,18 +26,13 @@ Shared:
 - [`just`](https://github.com/casey/just) (optional; wraps the Cargo and install
   commands below)
 
-Grok Monitor (Build):
+Grok Monitor:
 
-- A signed-in [Grok CLI](https://grok.com) session (`grok login`)
-
-Grok Bot Monitor:
-
-- The Grok Bot desktop app, signed in (one or more installs / userData dirs)
-- For v11 secrets, an unlocked login keyring (Secret Service). Chromium v10
-  secrets (typical on COSMIC) do not need the keyring
-- A launchable Grok Bot desktop file (`sand.desktop`, `grok-bot.desktop`, or
-  `grok-bot-*.desktop`, including autostart copies) if you want **Open Grok Bot**
-  to work
+- A signed-in [Grok CLI](https://grok.com) session for each account (`grok login`)
+- Optional: Grok Bot userData dirs (`Grok Bot` and `Grok Bot Work`) so the
+  applet can tell the personal profile from the work profile. Tokens from those
+  dirs are not sent anywhere. v11 secrets need an unlocked login keyring;
+  Chromium v10 secrets (typical on COSMIC) do not
 
 Grok API Monitor:
 
@@ -111,23 +113,62 @@ install -Dm0644 res/io.github.simple-systems-se.grok-mon-api.metainfo.xml \
   ~/.local/share/metainfo/io.github.simple-systems-se.grok-mon-api.metainfo.xml
 ```
 
-Add **Grok Monitor**, **Grok Bot Monitor**, or **Grok API Monitor** in
-**COSMIC Settings → Desktop → Panel → Applets**. If they do not appear, restart
-the panel:
+Add **Grok Monitor** or **Grok API Monitor** in
+**COSMIC Settings → Desktop → Panel → Applets**. Do not add **Grok Bot Monitor**.
+If a new applet does not appear, restart the panel:
 
 ```sh
 pkill cosmic-panel
 ```
 
+`just install-user` installs only for the user running it (`~/.local`). It does
+not change other users, and it does not remove an applet that is already pinned
+to the panel.
+
+## Update on Pop!_OS COSMIC
+
+Grok Build and Grok Bot now share one weekly pool. After you install or upgrade:
+
+1. Open **COSMIC Settings → Desktop → Panel → Applets**.
+2. Remove **Grok Bot Monitor** if it is on the panel. This is a manual step.
+   The package keeps the old desktop file so the slot does not go blank, and
+   that slot now only tells you to remove it. It does not fetch usage.
+3. Keep **Grok Monitor**. It shows one chip for the work account (**sim sys**)
+   and one for the personal account (**pers**).
+4. Keep **Grok API Monitor** if you watch prepaid API credits. That applet is
+   unchanged.
+5. If the updated applet does not show up, run `pkill cosmic-panel`.
+
+Sign-in files are left in place: `~/.grok/auth.json`, `~/.config/Grok Bot*`,
+and `~/.config/grok-mon-api/credentials.json`. Settings already stored for
+Grok Monitor stay (poll interval, sparkline, used/remaining, pace). A saved
+panel label of `work` becomes `sim sys`, and `personal` becomes `pers`. Any
+other custom label is kept. Labels that lived only on the Bot applet are copied
+onto Grok Monitor when that chip does not already have one.
+
+To install the upgrade for the current user without `sudo`, from a git checkout:
+
+```sh
+just install-user
+```
+
+Or, for a system package on Pop!_OS 24 / Ubuntu 24.04 amd64:
+
+```sh
+sudo apt install ./cosmic-ext-applet-grok-monitor_*_amd64.deb
+```
+
+`apt install` of a newer `.deb` replaces the binary. It still does not edit the
+panel. Do the applet removal in Settings after the package is installed.
+
 ## Usage
 
 The panel chip shows a circular usage ring (the same shape Minimon uses for
-memory) with a small **hammer** (Build), **robot** (Bot), or **key** (API) in
-the center, plus a label (account email, API key / team name, or a custom name
-from Settings). Build and Bot show one chip per signed-in account. By default Build and
-Bot also show current usage as a whole percent; API shows remaining prepaid
-dollars. Settings can hide the number or (for Build and Bot) switch the number
-and ring fill to percent remaining.
+memory) with a small **hammer** (Grok) or **key** (API) in the center, plus a
+label. Grok shows one chip per account. By default that chip shows current
+usage of the shared pool as a whole percent. API shows remaining prepaid
+dollars. Settings can hide the number or (for Grok) switch the number and ring
+fill to percent remaining.
 Color follows percent **used**, stepped each whole percent: green 0–50%, yellow
 50–80%, orange 80–90%, red 90%+. For API, that percent used is remaining
 prepaid mapped against a $50 full wallet (green above $25, yellow through $10,
@@ -137,8 +178,9 @@ Click a chip for a popup with:
 
 - Plan name and account email
 - Usage bar (0–100, colored like the ring) and percent
+- **Shared weekly pool** when the account is on unified billing
 - Weekly or monthly reset time
-- Weekly pace (Build and Bot): time until credits run out at the current burn, or how much is left at reset if they will last the week
+- Weekly pace: time until credits run out at the current burn, or how much is left at reset if they will last the week
 - How long ago usage was fetched
 - Live Grok CLI session count (from `~/.grok/active_sessions.json`)
 - **Open usage** (opens [grok.com usage](https://grok.com/?_s=usage))
@@ -157,21 +199,49 @@ Panel states:
 If you see `—` on Grok Monitor, run `grok login` and wait for the next poll.
 On Grok API Monitor, add a Management API key (see below).
 
-## Grok Bot Monitor
+## Accounts
 
-A second applet, launched as `cosmic-ext-applet-grok-monitor --product=bot`.
-It is independent of Grok Monitor: separate panel chips, settings, and
-accounts.
+Grok Monitor keeps the work account and the personal account separate. It does
+not add their percents together.
 
-Each signed-in Grok Bot account gets its own chip with that account’s email
-and weekly usage as a whole percent (or `n/a` on an enterprise pool). Click a
-chip for that account’s reset time, weekly pace, optional on-demand spend, whether any
-discovered Grok Bot install is running, and up to three recently active bots
-(merged across those installs).
+| Account | Panel label | How it is recognized |
+|---------|-------------|----------------------|
+| Work | `sim sys` | Grok Bot profile directory `Grok Bot Work`, or a saved label `work` / `sim sys` |
+| Personal | `pers` | Grok Bot profile directory `Grok Bot`, or a saved label `personal` / `pers` |
+
+The same email signed in to both the Grok CLI and Grok Bot is **one** chip.
+The percent is that account’s `creditUsagePercent` from
+`GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`. On a unified
+plan that number is the shared weekly pool (Build, Bot, Chat, and the other
+Grok products). `productUsage` rows are a breakdown of the same pool. They are
+not added to the headline, and the old Cursor Sand / Grok Bot ledger is not
+added either.
+
+If the headline percent is missing on a unified plan, the chip does not invent
+a total by summing product rows. A legacy plan that is not unified still uses
+the Grok Build row only, when that is all the payload has.
+
+An account that exists only as a Grok Bot profile, with no Grok CLI login, is
+still listed so it is not dropped. Its chip stays at `—` until `grok login`
+for that account. This build does not fall back to the old Bot percent.
+
+When exactly two accounts are present and only one role is known, the other
+becomes the partner label (`sim sys` or `pers`). A third account is not
+guessed. A custom panel label other than `work` or `personal` is left as you
+set it.
+
+## Retired Grok Bot Monitor
+
+`cosmic-ext-applet-grok-monitor --product=bot` no longer fetches usage. If the
+old applet is still on the panel it shows a removal note instead of a second
+meter. Remove it with the steps in **Update on Pop!_OS COSMIC**.
+
+The applet can still read Grok Bot profile directories to match the work and
+personal accounts to CLI logins. It does not call `api2.cursor.sh`.
 
 ### Weekly pace
 
-Build and Bot limits are weekly. The popup adds a short line about when the
+The shared pool is weekly on current plans. The popup adds a short line about when the
 remaining quota hits zero if the current burn continues:
 
 - `Will run out in 2d 4h` when that time is **before** the next reset
@@ -198,14 +268,12 @@ The first ~1% of the week (and any moment before the period opens) shows
 jumpy ETA from a tiny sample. A fast start that has already used 5% or more
 still reports `Will run out in …`.
 
-Build uses `currentPeriod.start` → `end` from the billing payload when present.
-Bot only publishes the next reset, so the start is inferred as reset minus 7
-days. Pace is hidden when there is no reset time, when the window is not weekly
-(Build monthly/daily), or on a Bot enterprise pool. API prepaid has no weekly
-quota window, so that applet has no pace line. Settings can hide the line; it
-is on by default for Build and Bot.
+Pace uses `currentPeriod.start` → `end` from the billing payload when present.
+Pace is hidden when there is no reset time, or when the window is not weekly
+(monthly/daily). API prepaid has no weekly quota window, so that applet has no
+pace line. Settings can hide the line; it is on by default.
 
-Auth comes from every Grok Bot userData directory the applet can find:
+Profile discovery, used only to tell accounts apart:
 
 - Auto-discovery: directories under `$XDG_CONFIG_HOME` (or `~/.config`) whose
   names start with `Grok Bot` and that contain `sand-secrets.json`. That
@@ -217,31 +285,17 @@ Auth comes from every Grok Bot userData directory the applet can find:
 Tokens are read-only. Chromium v10 blobs use OSCrypt’s built-in password;
 v11 blobs use the login keyring item whose `application=` label matches that
 directory’s name (`Grok Bot`, `Grok Bot Work`, …), then fall back
-to `application=Grok Bot`. The applet shows every `cursor-accounts` entry
-(active first) and still accepts the older top-level `cursor-access-token`
-field.
+to `application=Grok Bot`. Discovery reads `cursor-accounts` (active first) and still accepts the older
+top-level `cursor-access-token` field. The same email in more than one
+directory is one account. The CLI login is the one used for the usage request.
 
-If the same account is signed in under more than one directory, only one chip
-is shown. The winner is the copy with a live token, then a running install,
-then the secrets-file active account, then the most recently used directory
-(mtime of secrets / session marker / persistence), then the default
-`Grok Bot` dir.
-
-**Open Grok Bot** launches the desktop file that matches the selected chip’s
-userData dir when it can (`grok-bot-work.desktop` for
-`Grok Bot Work`, and so on). Otherwise it starts the Grok Bot
-binary with `--user-data-dir`. Single-install setups keep the old
-`grok-bot.desktop` / `sand.desktop` behavior.
-
-If you see `—`, open Grok Bot and sign in, then wait for the next poll.
-
-This is not Grok Chat. The Grok CLI billing `productUsage` list has GrokBuild
-and GrokChat; Grok Bot usage is a Cursor Sand ledger.
+If you see `—`, run `grok login` for that account and wait for the next poll.
 
 ## Grok API Monitor
 
-A third applet, launched as `cosmic-ext-applet-grok-monitor --product=api`.
-It is independent of the others: separate panel chip, settings, and credentials.
+The other applet, launched as `cosmic-ext-applet-grok-monitor --product=api`.
+It is independent: separate panel chip, settings, and credentials. Prepaid
+monitoring is unchanged.
 
 The chip shows remaining **prepaid API dollars** (the same remaining-credit
 figure as [console.x.ai](https://console.x.ai) billing). Click for optional
@@ -291,17 +345,18 @@ Open the popup and choose **Settings**.
 | Sparkline on panel | on / off | off |
 | Percent on panel | on / off | on |
 | Amount on panel (API) | on / off | on |
-| Pace in popup (Build / Bot) | on / off | on |
-| Panel label | text | account email / API key name (per chip) |
+| Pace in popup (Grok) | on / off | on |
+| Panel label | text | `sim sys`, `pers`, account email, or API key name |
 | Panel number | used / remaining | used |
 
 The ring fill matches the panel number (used or remaining). Color is always
 based on percent used: green through 50%, yellow through 80%, orange through
 90%, red above that, with a distinct shade at each whole percent. Settings are
 stored in COSMIC config under app id
-`io.github.simple-systems-se.grok-mon` (Build),
-`io.github.simple-systems-se.grok-mon-bot` (Bot), or
+`io.github.simple-systems-se.grok-mon` (Grok) or
 `io.github.simple-systems-se.grok-mon-api` (API).
+The retired Bot id `io.github.simple-systems-se.grok-mon-bot` is left on disk
+and is only read so its labels can be copied once. It is not overwritten.
 
 API has no used/remaining toggle: the chip is remaining dollars. The ring is
 full at $50 remaining.
@@ -309,35 +364,19 @@ full at $50 remaining.
 ## Authentication
 
 Grok Monitor reads the Grok CLI’s OIDC bearer from `~/.grok/auth.json` (or
-`$GROK_HOME/auth.json` if that is set). It prefers the `https://auth.x.ai::`
-entry written by `grok login`.
+`$GROK_HOME/auth.json` if that is set). It prefers unexpired `https://auth.x.ai::`
+entries written by `grok login`. Each unexpired entry is its own account.
+The bearer is sent only to the Grok CLI billing and settings endpoints.
 
-Grok Bot Monitor decrypts the Cursor access token stored by each Grok Bot
-install it finds. By default that is every `~/.config/Grok Bot*` directory
-that contains `sand-secrets.json` (the classic `~/.config/Grok Bot` layout
-still works on its own). Additional directories can be listed in
-`GROK_BOT_CONFIG_DIRS`. Chromium v10 ciphertext uses the built-in OSCrypt
-password (`peanuts`); v11 ciphertext uses the login keyring item whose
-`application=` label is the directory name — Electron uses `app.getName()`
-for both userData and Safe Storage, so `Grok Bot Work` is a
-different keyring item than `Grok Bot`. The lookup prefers
-`xdg:schema=chrome_libsecret_os_crypt_password_v2` and still tries
-`application=Grok Bot` if the per-directory item is missing. On COSMIC,
-Grok Bot typically writes v10 because Chromium does not treat COSMIC as a
-libsecret desktop, so a leftover Safe Storage keyring item is ignored when
-it no longer matches the file. The system may prompt to unlock the keyring
-for v11; that prompt is labeled by Grok Bot, not by this applet. The applet
-reads every `cursor-accounts` entry (active first) and falls back to a
-top-level `cursor-access-token` if that older layout is still present. The
-same account in more than one directory is shown once (live token, then
-running, then active, then most recently used). It does not refresh tokens
-or change which account Grok Bot considers active. When Grok Bot refreshes
-them, the next poll picks up the new file contents.
-
-Bot mode is unofficial. It reuses the local Grok Bot session to call Cursor’s
-private usage endpoints (`api2.cursor.sh` DashboardService). Those APIs are
-unsupported and can change or break without notice. This project is not
-affiliated with, endorsed by, or supported by Cursor or xAI.
+To tell `sim sys` from `pers`, the applet also reads Grok Bot profile
+directories (`~/.config/Grok Bot*`, plus `GROK_BOT_CONFIG_DIRS`). It decrypts
+`sand-secrets.json` only far enough to read the account email and id, then
+drops the token. It does not refresh tokens, does not change which account
+Grok Bot considers active, and does not call Cursor. Chromium v10 ciphertext
+uses the built-in OSCrypt password (`peanuts`); v11 ciphertext uses the login
+keyring item whose `application=` label is the directory name. On COSMIC,
+Grok Bot typically writes v10. A v11 file can prompt to unlock the keyring;
+that prompt is labeled by Grok Bot, not by this applet.
 
 Grok API Monitor reads a Management API key from
 `~/.config/grok-mon-api/credentials.json` and/or `XAI_MANAGEMENT_API_KEY`
@@ -355,18 +394,9 @@ Grok Monitor:
 - Sends the Grok CLI bearer only to `https://cli-chat-proxy.grok.com`
   (`/v1/billing`, `/v1/settings`).
 
-Grok Bot Monitor:
-
-- Reads `sand-secrets.json`, `sand-session-marker.json`, and
-  `sand-client-persistence` (bot names and unread counts) from each
-  discovered Grok Bot userData dir (`~/.config/Grok Bot*`, plus any
-  `GROK_BOT_CONFIG_DIRS` entries).
-- Reads the login keyring item for each profile’s Safe Storage
-  (`application=` = directory name, then `Grok Bot`; decrypt only).
-- Sends the decrypted Cursor bearer only to `https://api2.cursor.sh`
-  DashboardService usage methods (`GetSandUsageStatus`,
-  `GetCurrentPeriodUsage`), plus `x-cursor-checksum` (derived from the local
-  machine id), `x-cursor-client-version`, and a random `x-request-id`.
+Grok Monitor also reads Grok Bot profile files when they are present, to match
+accounts. It does not send those tokens off the machine. The retired Grok Bot
+Monitor slot does not poll.
 
 Grok API Monitor:
 
@@ -381,9 +411,8 @@ Grok API Monitor:
 None of the applets:
 
 - Writes credentials back to disk.
-- Logs tokens. The Authorization header and Bot checksum header are marked
-  sensitive so HTTP debug traces redact them. In-memory secrets are zeroized
-  when dropped.
+- Logs tokens. The Authorization header is marked sensitive so HTTP debug
+  traces redact it. In-memory secrets are zeroized when dropped.
 
 ## Uninstall
 
@@ -417,8 +446,9 @@ rm -f ~/.local/bin/cosmic-ext-applet-grok-monitor \
   ~/.local/share/metainfo/io.github.simple-systems-se.grok-mon-api.metainfo.xml
 ```
 
-Then remove **Grok Monitor**, **Grok Bot Monitor**, or **Grok API Monitor** from
-the panel if they are still listed.
+Then remove **Grok Monitor**, **Grok Bot Monitor**, and **Grok API Monitor** from
+the panel if they are still listed
+(**COSMIC Settings → Desktop → Panel → Applets**).
 
 Settings stay in COSMIC config until you purge them:
 
@@ -444,7 +474,6 @@ just check
 just build-release
 just package-linux
 just run
-just run -- --product=bot
 just run -- --product=api
 ```
 
@@ -459,7 +488,6 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 cargo build --release
 RUST_LOG=cosmic_ext_applet_grok_monitor=info cargo run --release
-RUST_LOG=cosmic_ext_applet_grok_monitor=info cargo run --release -- --product=bot
 RUST_LOG=cosmic_ext_applet_grok_monitor=info cargo run --release -- --product=api
 ```
 
@@ -472,6 +500,6 @@ See [LICENSE](LICENSE) (Unlicense).
 their own licenses; see `Cargo.lock`.
 
 Grok is a trademark of xAI. Cursor is a trademark of Anysphere. COSMIC is a
-trademark of System76. The names are used here only to identify Grok Build,
-Grok Bot, the COSMIC™ desktop, and the usage endpoints those apps already
-call. This is an unofficial community project.
+trademark of System76. The names are used here only to identify the Grok
+products, the COSMIC™ desktop, and the usage endpoint the Grok CLI already
+calls. This is an unofficial community project.

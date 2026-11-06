@@ -1,3 +1,4 @@
+mod accounts;
 mod api;
 mod app;
 mod auth;
@@ -26,7 +27,9 @@ fn main() -> cosmic::iced::Result {
         .init();
     match product() {
         Product::Bot => {
-            tracing::info!("starting grok bot monitor applet");
+            tracing::info!(
+                "starting retired grok bot monitor; remove this applet from the COSMIC panel"
+            );
             cosmic::applet::run::<bot::app::GrokBotMonitor>(())
         }
         Product::Api => {
@@ -34,7 +37,7 @@ fn main() -> cosmic::iced::Result {
             cosmic::applet::run::<api::app::GrokApiMonitor>(())
         }
         Product::Build => {
-            tracing::info!("starting grok monitor applet");
+            tracing::info!("starting grok account monitor applet");
             cosmic::applet::run::<app::GrokMonitor>(())
         }
     }

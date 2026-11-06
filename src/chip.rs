@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 
 pub const IDENTITY_MAX_CHARS: usize = 28;
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn display_identity(email: Option<&str>, name: Option<&str>) -> Option<String> {
     email
         .map(str::trim)

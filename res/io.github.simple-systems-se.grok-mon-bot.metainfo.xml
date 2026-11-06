@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>io.github.simple-systems-se.grok-mon-bot</id>
   <name>Grok Bot Monitor</name>
-  <summary>Grok Bot weekly usage in the COSMIC panel</summary>
+  <summary>Retired. Remove this applet. Usage is on Grok Monitor.</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>Unlicense</project_license>
   <developer id="io.github.simple-systems-se">
@@ -10,13 +10,9 @@
   </developer>
   <description>
     <p>
-      A panel applet for the COSMIC™ desktop that shows current Grok Bot weekly
-      usage from the Grok Bot desktop app, plus a short list of live bots.
-    </p>
-    <p>
-      This unofficial applet decrypts the Grok Bot local session (keyring plus
-      sand-secrets.json, read-only) and calls Cursor’s private usage endpoints.
-      It is not affiliated with Cursor or xAI.
+      Retired panel slot. Grok Bot usage is included in the shared weekly pool
+      on Grok Monitor. Remove this applet from the COSMIC panel after updating.
+      It does not poll usage.
     </p>
   </description>
   <launchable type="desktop-id">io.github.simple-systems-se.grok-mon-bot.desktop</launchable>
@@ -31,6 +27,11 @@
     <content_attribute id="social-info">mild</content_attribute>
   </content_rating>
   <releases>
+    <release version="0.3.0" date="2026-11-06">
+      <description>
+        <p>Stop polling the separate Grok Bot usage ledger. Remove this applet from the panel.</p>
+      </description>
+    </release>
     <release version="0.2.4" date="2026-10-01">
       <description>
         <p>Version bump to match the shared applet package.</p>

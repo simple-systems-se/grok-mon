@@ -1,7 +1,9 @@
+use crate::accounts::{self, AccountRole, SeenAccount, SourceKind};
 use crate::auth::{AuthError, AuthIdentity, Bearer, load_bearers};
 use chrono::{DateTime, Utc};
 use futures_util::future::join_all;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const SETTINGS_URL: &str = "https://cli-chat-proxy.grok.com/v1/settings";
@@ -21,12 +23,17 @@ pub struct UsageSnapshot {
     pub plan: Option<String>,
     pub email: Option<String>,
     pub fetched_at: DateTime<Utc>,
+    /// `creditUsagePercent` came from a unified weekly pool. Product rows are
+    /// a breakdown of that same pool and were not added.
+    pub unified: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct BuildAccountFetch {
     pub id: String,
     pub identity: Option<String>,
+    pub aliases: Vec<String>,
+    pub role: AccountRole,
     pub result: Result<UsageSnapshot, FetchError>,
 }
 
@@ -71,6 +78,10 @@ struct CreditsConfig {
     subscription_tier: Option<String>,
     #[serde(rename = "productUsage")]
     product_usage: Option<Vec<ProductUsage>>,
+    /// Shared weekly/monthly pool across Grok products, including Grok Bot
+    /// after account unification. Absent on the legacy Build-only shape.
+    #[serde(default, rename = "isUnifiedBillingUser")]
+    is_unified_billing_user: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -124,7 +135,7 @@ pub fn parse_credits_json(bytes: &[u8]) -> Result<UsageSnapshot, FetchError> {
         .as_ref()
         .and_then(|p| p.period_type.clone());
 
-    let grok_build_percent = config.product_usage.as_ref().and_then(|items| {
+    let build_percent = config.product_usage.as_ref().and_then(|items| {
         items.iter().find_map(|item| {
             if item.product.as_deref() == Some("GrokBuild") {
                 item.usage_percent
@@ -133,30 +144,25 @@ pub fn parse_credits_json(bytes: &[u8]) -> Result<UsageSnapshot, FetchError> {
             }
         })
     });
-
-    let (percent, used, limit) = if let Some(p) = config.credit_usage_percent.or(grok_build_percent)
-    {
-        (clamp_percent(p as f32), None, None)
-    } else if let (Some(cap), Some(used_val)) = (
-        config.on_demand_cap.as_ref().and_then(|a| a.val),
-        config.on_demand_used.as_ref().and_then(|a| a.val),
-    ) {
-        if cap > 0.0 {
-            (
-                clamp_percent((used_val / cap * 100.0) as f32),
-                Some(used_val),
-                Some(cap),
-            )
-        } else if resets_at.is_some() {
-            (0.0, None, None)
-        } else {
-            return Err(FetchError::Parse("no usage fields".into()));
-        }
-    } else if resets_at.is_some() {
-        (0.0, None, None)
-    } else {
-        return Err(FetchError::Parse("no usage fields".into()));
-    };
+    let on_demand = config.on_demand_cap.as_ref().and_then(|cap| {
+        let cap = cap.val?;
+        let used = config
+            .on_demand_used
+            .as_ref()
+            .and_then(|amount| amount.val)?;
+        Some((used, cap))
+    });
+    // `creditUsagePercent` is the shared pool. `productUsage` repeats slices of
+    // that same pool (Build, Chat, and the rest). Those slices are not added
+    // to the headline, and the old Grok Bot ledger is not consulted here.
+    let unified = config.is_unified_billing_user.unwrap_or(false);
+    let (percent, used, limit) = select_percent(
+        unified,
+        config.credit_usage_percent,
+        build_percent,
+        on_demand,
+        resets_at.is_some(),
+    )?;
 
     let plan = config
         .subscription_tier
@@ -174,7 +180,48 @@ pub fn parse_credits_json(bytes: &[u8]) -> Result<UsageSnapshot, FetchError> {
         plan,
         email: None,
         fetched_at: Utc::now(),
+        unified,
     })
+}
+
+fn select_percent(
+    unified: bool,
+    pool: Option<f64>,
+    build_percent: Option<f64>,
+    on_demand: Option<(f64, f64)>,
+    has_period: bool,
+) -> Result<(f32, Option<f64>, Option<f64>), FetchError> {
+    if let Some(percent) = pool {
+        return Ok((clamp_percent(percent as f32), None, None));
+    }
+    if unified {
+        // Headline omitted. Do not sum productUsage, and do not substitute one
+        // product slice for the pool.
+        if has_period {
+            return Ok((0.0, None, None));
+        }
+        return Err(FetchError::Parse("no usage fields".into()));
+    }
+    if let Some(percent) = build_percent {
+        return Ok((clamp_percent(percent as f32), None, None));
+    }
+    if let Some((used_val, cap)) = on_demand {
+        if cap > 0.0 {
+            return Ok((
+                clamp_percent((used_val / cap * 100.0) as f32),
+                Some(used_val),
+                Some(cap),
+            ));
+        }
+        if has_period {
+            return Ok((0.0, None, None));
+        }
+        return Err(FetchError::Parse("no usage fields".into()));
+    }
+    if has_period {
+        return Ok((0.0, None, None));
+    }
+    Err(FetchError::Parse("no usage fields".into()))
 }
 
 fn clamp_percent(p: f32) -> f32 {
@@ -218,18 +265,98 @@ fn auth_headers(token: &str) -> Result<reqwest::header::HeaderMap, FetchError> {
 }
 
 pub async fn fetch_all_usage() -> Result<Vec<BuildAccountFetch>, FetchError> {
-    let bearers = load_bearers().map_err(FetchError::Auth)?;
-    let client = http_client()?;
-    let fetches = bearers.into_iter().map(|bearer| {
+    let cli_result = load_bearers();
+    let bot_hints = bot_identity_hints().await;
+
+    let bearers = match cli_result {
+        Ok(bearers) => bearers,
+        Err(err) if bot_hints.is_empty() => return Err(FetchError::Auth(err)),
+        Err(err) => {
+            tracing::info!("Grok CLI auth unavailable ({err}); account list has no usage yet");
+            Vec::new()
+        }
+    };
+
+    let mut seen = Vec::new();
+    for bearer in &bearers {
+        seen.push(SeenAccount {
+            id: bearer.id.clone(),
+            email: bearer.identity.email.clone(),
+            identity: bearer.identity.email.clone(),
+            role: AccountRole::Unspecified,
+            kind: SourceKind::Cli,
+        });
+    }
+    seen.extend(bot_hints);
+
+    let merged = accounts::merge_seen(seen);
+    if merged.is_empty() {
+        return Err(FetchError::Auth(AuthError::Missing));
+    }
+
+    let client = if merged.iter().any(|account| account.cli_id.is_some()) {
+        Some(http_client()?)
+    } else {
+        None
+    };
+    let mut by_id: HashMap<String, Bearer> = bearers
+        .into_iter()
+        .map(|bearer| (bearer.id.clone(), bearer))
+        .collect();
+
+    let fetches = merged.into_iter().map(|account| {
+        let bearer = account.cli_id.as_ref().and_then(|id| by_id.remove(id));
         let client = client.clone();
-        async move { fetch_one_account(&client, bearer).await }
+        async move {
+            let result = match (client, bearer) {
+                (Some(client), Some(bearer)) => fetch_bearer(&client, bearer).await,
+                _ => Err(FetchError::Auth(AuthError::Missing)),
+            };
+            BuildAccountFetch {
+                id: account.id,
+                identity: account.identity.or(account.email),
+                aliases: account.aliases,
+                role: account.role,
+                result,
+            }
+        }
     });
     Ok(join_all(fetches).await)
 }
 
-async fn fetch_one_account(client: &reqwest::Client, bearer: Bearer) -> BuildAccountFetch {
+async fn bot_identity_hints() -> Vec<SeenAccount> {
+    let loaded = match crate::bot::secrets::load_accounts().await {
+        Ok(accounts) => accounts,
+        Err(err) => {
+            tracing::info!("Grok Bot profiles skipped for account list: {err}");
+            return Vec::new();
+        }
+    };
+    loaded
+        .into_iter()
+        .map(|account| {
+            let dir_name = account
+                .config_dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
+            SeenAccount {
+                id: account.id.clone(),
+                email: account.identity.email.clone(),
+                identity: account.identity.display().map(str::to_string),
+                role: accounts::role_from_dir_name(dir_name),
+                kind: SourceKind::Bot,
+            }
+        })
+        .collect()
+}
+
+async fn fetch_bearer(
+    client: &reqwest::Client,
+    bearer: Bearer,
+) -> Result<UsageSnapshot, FetchError> {
     let id = bearer.id.clone();
-    let identity = bearer.identity.email.clone();
+    let identity_email = bearer.identity.email.clone();
     let result = match tokio::time::timeout(
         std::time::Duration::from_secs(20),
         fetch_usage_for(client, &bearer),
@@ -239,20 +366,19 @@ async fn fetch_one_account(client: &reqwest::Client, bearer: Bearer) -> BuildAcc
         Ok(result) => result,
         Err(_) => Err(FetchError::Http("billing timed out".into())),
     };
-    let result = result.map(|mut snapshot| {
+    result.map(|mut snapshot| {
         snapshot.account_id = id.clone();
+        if snapshot.email.is_none() {
+            snapshot.email = identity_email;
+        }
         tracing::info!(
             account = %id,
             percent = snapshot.percent,
-            "fetched Grok Build usage"
+            unified = snapshot.unified,
+            "fetched shared Grok usage"
         );
         snapshot
-    });
-    BuildAccountFetch {
-        id,
-        identity,
-        result,
-    }
+    })
 }
 
 async fn fetch_usage_for(
@@ -365,10 +491,56 @@ mod tests {
         let json = include_bytes!("../tests/fixtures/billing.json");
         let snap = parse_credits_json(json).unwrap();
         assert!((snap.percent - 2.0).abs() < f32::EPSILON);
+        assert!(snap.unified);
         assert!(snap.resets_at.is_some());
         assert!(snap.starts_at.is_some());
         assert!(snap.starts_at < snap.resets_at);
         assert_eq!(period_label(snap.period_type.as_deref()), "Weekly");
+    }
+
+    #[test]
+    fn shared_pool_is_not_the_sum_of_product_rows() {
+        let json = include_bytes!("../tests/fixtures/billing_shared_pool.json");
+        let snap = parse_credits_json(json).unwrap();
+        assert!(snap.unified);
+        assert!((snap.percent - 12.5).abs() < f32::EPSILON);
+        assert!((snap.percent - (8.0 + 3.0)).abs() > 0.1);
+        assert!((snap.percent - (12.5 + 8.0 + 3.0)).abs() > 0.1);
+    }
+
+    #[test]
+    fn unified_breakdown_without_headline_is_not_summed() {
+        let json = include_bytes!("../tests/fixtures/billing_unified_breakdown_only.json");
+        let snap = parse_credits_json(json).unwrap();
+        assert!(snap.unified);
+        assert_eq!(snap.percent, 0.0);
+        assert_eq!(snap.used, None);
+        assert_ne!(snap.percent, 12.0);
+    }
+
+    #[test]
+    fn legacy_build_slice_is_used_when_there_is_no_shared_pool() {
+        let json = include_bytes!("../tests/fixtures/billing_legacy_build.json");
+        let snap = parse_credits_json(json).unwrap();
+        assert!(!snap.unified);
+        assert!((snap.percent - 8.0).abs() < f32::EPSILON);
+        assert_ne!(snap.percent, 13.0);
+    }
+
+    #[test]
+    fn rejects_unusable_payloads() {
+        assert!(parse_credits_json(b"not-json").is_err());
+        assert!(parse_credits_json(b"{}").is_err());
+        let unified_without_period = br#"{
+            "config": {
+                "isUnifiedBillingUser": true,
+                "productUsage": [
+                    {"product": "GrokBuild", "usagePercent": 8},
+                    {"product": "GrokChat", "usagePercent": 4}
+                ]
+            }
+        }"#;
+        assert!(parse_credits_json(unified_without_period).is_err());
     }
 
     #[test]

@@ -122,6 +122,60 @@ pub fn merge_seen(seen: Vec<SeenAccount>) -> Vec<MergedAccount> {
     merged
 }
 
+/// Email merge, then legacy role labels, then an explicit link.
+///
+/// Directory names can leave both Bot profiles unspecified. Their saved
+/// captions still say which role they are. The link is resolved only after
+/// those captions are applied, and `build` is not a role caption.
+pub fn resolve_monitored_accounts(
+    seen: Vec<SeenAccount>,
+    links: &BTreeMap<String, String>,
+    labels: &BTreeMap<String, String>,
+) -> Vec<MergedAccount> {
+    let mut merged = merge_seen(seen);
+    fill_roles_from_legacy_labels(&mut merged, labels);
+    apply_explicit_links(merged, links)
+}
+
+fn fill_roles_from_legacy_labels(
+    accounts: &mut [MergedAccount],
+    labels: &BTreeMap<String, String>,
+) {
+    for account in accounts.iter_mut() {
+        if account.role != AccountRole::Unspecified {
+            continue;
+        }
+        let view = AccountView {
+            id: account.id.clone(),
+            aliases: account.aliases.clone(),
+            email: account.email.clone(),
+            role: account.role,
+        };
+        let mut agreed: Option<AccountRole> = None;
+        let mut conflict = false;
+        for label in associated_labels(&view, labels) {
+            let role = role_from_label(&label);
+            if role == AccountRole::Unspecified {
+                continue;
+            }
+            match agreed {
+                Some(previous) if previous != role => {
+                    conflict = true;
+                    break;
+                }
+                Some(_) => {}
+                None => agreed = Some(role),
+            }
+        }
+        if conflict {
+            continue;
+        }
+        if let Some(role) = agreed {
+            account.role = role;
+        }
+    }
+}
+
 /// Join accounts the user has explicitly confirmed.
 ///
 /// `links` maps an account id to a role token (`work` or `personal`, or any
@@ -136,12 +190,14 @@ pub fn apply_explicit_links(
     for (source_id, role_token) in links {
         let role = role_from_label(role_token);
         if role == AccountRole::Unspecified || source_id.is_empty() {
+            tracing::info!("explicit account link not applied: role token is not work or personal");
             continue;
         }
         let Some(source_idx) = merged
             .iter()
             .position(|account| account_has_id(account, source_id))
         else {
+            tracing::info!("explicit account link not applied: linked id was not discovered");
             continue;
         };
         let targets: Vec<usize> = merged
@@ -151,10 +207,17 @@ pub fn apply_explicit_links(
             .map(|(idx, _)| idx)
             .collect();
         if targets.len() != 1 {
+            tracing::info!(
+                targets = targets.len(),
+                "explicit account link not applied: role does not match exactly one other profile"
+            );
             continue;
         }
         let source_role = merged[source_idx].role;
         if source_role != AccountRole::Unspecified && source_role != role {
+            tracing::info!(
+                "explicit account link not applied: this sign-in already belongs to the other role"
+            );
             continue;
         }
         let target_idx = targets[0];
@@ -1031,5 +1094,145 @@ mod tests {
         let labels = BTreeMap::from([("bot-work".into(), "Desk".into())]);
         assert_eq!(caption_for(&account, &labels).as_deref(), Some("Desk"));
         assert!(label_updates(&labels, &[account]).is_empty());
+    }
+
+    fn unspecified(id: &str, email: Option<&str>, kind: SourceKind) -> SeenAccount {
+        SeenAccount {
+            id: id.into(),
+            email: email.map(str::to_string),
+            identity: email.map(str::to_string),
+            role: AccountRole::Unspecified,
+            kind,
+        }
+    }
+
+    /// The deployed failure: captions already migrated, directory roles absent,
+    /// and the Build key explicitly linked to work. The helper-only tests never
+    /// loaded those captions before resolving the link.
+    #[test]
+    fn migrated_captions_let_an_explicit_work_link_join_a_login_without_email() {
+        let build_id = "https://auth.x.ai::example-build";
+        let seen = vec![
+            unspecified(build_id, None, SourceKind::Cli),
+            unspecified("bot-work", Some("work@example.com"), SourceKind::Bot),
+            unspecified("bot-pers", Some("pers@example.com"), SourceKind::Bot),
+        ];
+        let labels = BTreeMap::from([
+            (build_id.into(), "build".into()),
+            ("bot-work".into(), "Grok (sim sys)".into()),
+            ("bot-pers".into(), "Grok (pers)".into()),
+        ]);
+        let links = BTreeMap::from([(build_id.into(), "work".into())]);
+
+        let unresolved = apply_explicit_links(merge_seen(seen.clone()), &links);
+        assert_eq!(
+            unresolved.len(),
+            3,
+            "directory roles are unset, so the link alone cannot see a work profile"
+        );
+
+        let resolved = resolve_monitored_accounts(seen, &links, &labels);
+        assert_eq!(resolved.len(), 2);
+        let work = resolved
+            .iter()
+            .find(|account| account.role == AccountRole::Work)
+            .unwrap();
+        let pers = resolved
+            .iter()
+            .find(|account| account.role == AccountRole::Personal)
+            .unwrap();
+        assert_eq!(work.cli_id.as_deref(), Some(build_id));
+        assert!(work.aliases.iter().any(|id| id == "bot-work"));
+        assert!(pers.cli_id.is_none());
+        assert_eq!(
+            caption_for(&view(work), &labels).as_deref(),
+            Some("Grok (sim sys)")
+        );
+        assert_eq!(
+            caption_for(&view(pers), &labels).as_deref(),
+            Some("Grok (pers)")
+        );
+        let readings = [
+            UsageReading {
+                bearer_id: build_id.into(),
+                percent: 12.0,
+            },
+            UsageReading {
+                bearer_id: "bot-work".into(),
+                percent: 80.0,
+            },
+            UsageReading {
+                bearer_id: "bot-pers".into(),
+                percent: 40.0,
+            },
+        ];
+        assert_eq!(assigned_percent(work, &readings), Some(12.0));
+        assert_eq!(assigned_percent(pers, &readings), None);
+        assert_ne!(assigned_percent(work, &readings), Some(92.0));
+    }
+
+    #[test]
+    fn explicit_link_without_a_role_caption_keeps_the_build_chip() {
+        let seen = vec![
+            unspecified("cli-build", None, SourceKind::Cli),
+            unspecified("bot-a", Some("a@example.com"), SourceKind::Bot),
+            unspecified("bot-b", Some("b@example.com"), SourceKind::Bot),
+        ];
+        let labels = BTreeMap::from([
+            ("cli-build".into(), "build".into()),
+            ("bot-a".into(), "Desk".into()),
+            ("bot-b".into(), "Other".into()),
+        ]);
+        let links = BTreeMap::from([("cli-build".into(), "work".into())]);
+        let resolved = resolve_monitored_accounts(seen, &links, &labels);
+        assert_eq!(resolved.len(), 3);
+        assert!(
+            resolved
+                .iter()
+                .any(|account| account.cli_id.as_deref() == Some("cli-build"))
+        );
+        assert_eq!(
+            caption_for(
+                &view(
+                    resolved
+                        .iter()
+                        .find(|account| account.cli_id.as_deref() == Some("cli-build"))
+                        .unwrap()
+                ),
+                &labels
+            )
+            .as_deref(),
+            Some("build")
+        );
+    }
+
+    #[test]
+    fn label_role_does_not_pull_an_email_matched_login_off_personal() {
+        let seen = vec![
+            unspecified("cli-build", Some("pers@example.com"), SourceKind::Cli),
+            unspecified("bot-work", Some("work@example.com"), SourceKind::Bot),
+            unspecified("bot-pers", Some("pers@example.com"), SourceKind::Bot),
+        ];
+        let labels = BTreeMap::from([
+            ("cli-build".into(), "build".into()),
+            ("bot-work".into(), "bot (work)".into()),
+            ("bot-pers".into(), "bot (pers)".into()),
+        ]);
+        let links = BTreeMap::from([("cli-build".into(), "work".into())]);
+        let resolved = resolve_monitored_accounts(seen, &links, &labels);
+        assert_eq!(resolved.len(), 2);
+        let pers = resolved
+            .iter()
+            .find(|account| account.role == AccountRole::Personal)
+            .unwrap();
+        assert_eq!(pers.cli_id.as_deref(), Some("cli-build"));
+        assert!(
+            resolved
+                .iter()
+                .find(|account| account.role == AccountRole::Work)
+                .unwrap()
+                .cli_id
+                .is_none()
+        );
     }
 }

@@ -30,6 +30,15 @@
     <content_attribute id="social-info">mild</content_attribute>
   </content_rating>
   <releases>
+    <release version="0.3.2" date="2026-11-07">
+      <description>
+        <p>
+          Apply a saved work or personal link after legacy profile captions
+          establish that role. A chip with no Grok CLI login stays blank
+          instead of claiming the account is signed out.
+        </p>
+      </description>
+    </release>
     <release version="0.3.1" date="2026-11-07">
       <description>
         <p>

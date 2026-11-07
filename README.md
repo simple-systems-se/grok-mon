@@ -194,11 +194,15 @@ Panel states:
 | Chip | Meaning |
 |------|---------|
 | `…` | Fetching |
-| `—` | Not signed in, or the session has expired |
+| `—` | No Grok CLI login is attached to this chip, or that CLI session expired |
 | `?` | Request failed, and there is no previous reading |
 | dimmed percent | Last good reading; the latest poll failed |
 
-If you see `—` on Grok Monitor, run `grok login` and wait for the next poll.
+If you see `—` on Grok Monitor, that chip has no Grok CLI login attached.
+A Grok Bot profile can still be present. The mark is not a sign-out check.
+Join the Build sign-in under **Same weekly pool** when it belongs to that
+profile. The weekly percent is the CLI reading for the joined profile only.
+Run `grok login` when the CLI session itself is missing or expired.
 On Grok API Monitor, add a Management API key (see below).
 
 ## Accounts

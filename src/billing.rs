@@ -266,6 +266,7 @@ fn auth_headers(token: &str) -> Result<reqwest::header::HeaderMap, FetchError> {
 
 pub async fn fetch_all_usage(
     links: BTreeMap<String, String>,
+    labels: BTreeMap<String, String>,
 ) -> Result<Vec<BuildAccountFetch>, FetchError> {
     let cli_result = load_bearers();
     let bot_hints = bot_identity_hints().await;
@@ -291,7 +292,7 @@ pub async fn fetch_all_usage(
     }
     seen.extend(bot_hints);
 
-    let merged = accounts::apply_explicit_links(accounts::merge_seen(seen), &links);
+    let merged = accounts::resolve_monitored_accounts(seen, &links, &labels);
     if merged.is_empty() {
         return Err(FetchError::Auth(AuthError::Missing));
     }

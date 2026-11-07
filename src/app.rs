@@ -348,7 +348,8 @@ impl GrokMonitor {
         self.fetching = true;
         self.fetch_started = Some(std::time::Instant::now());
         let links = self.config.account_links.clone();
-        Task::perform(fetch_all_usage(links), |result| {
+        let labels = self.config.account_labels.clone();
+        Task::perform(fetch_all_usage(links, labels), |result| {
             cosmic::action::Action::App(Message::UsageFetched(result))
         })
     }
@@ -543,12 +544,12 @@ impl GrokMonitor {
         }
 
         if let Some(error) = error {
-            col = col.push(padded(text::caption(error.to_string()).class(
-                theme::Text::Color({
-                    let c = theme::active().cosmic().destructive_color();
-                    c.into()
-                }),
-            )));
+            let status =
+                chip_status_line(chip.map(|account| account.id.as_str()).unwrap_or(""), error);
+            col = col.push(padded(text::caption(status).class(theme::Text::Color({
+                let c = theme::active().cosmic().destructive_color();
+                c.into()
+            }))));
         }
 
         if let Some(error) = &self.open_error {
@@ -785,6 +786,15 @@ fn usage_placeholder(error: &FetchError) -> &'static str {
     }
 }
 
+fn chip_status_line(account_id: &str, error: &FetchError) -> String {
+    match error {
+        FetchError::Auth(crate::auth::AuthError::Missing) if !account_id.is_empty() => {
+            "No Grok CLI login is attached to this chip. The weekly number stays blank. This is not a sign-out check of Grok Bot.".into()
+        }
+        other => other.to_string(),
+    }
+}
+
 fn link_button<'a>(
     label: &'a str,
     role: Option<AccountRole>,
@@ -903,6 +913,21 @@ mod tests {
         assert_ne!(
             usage_placeholder(&FetchError::Auth(AuthError::Missing)),
             "0%"
+        );
+    }
+
+    #[test]
+    fn missing_cli_on_a_discovered_chip_is_not_a_sign_out() {
+        let line = super::chip_status_line("bot-pers", &FetchError::Auth(AuthError::Missing));
+        assert!(line.contains("No Grok CLI login is attached"));
+        assert!(!line.contains("not signed in"));
+        assert_eq!(
+            super::chip_status_line("", &FetchError::Auth(AuthError::Missing)),
+            "not signed in — run grok login"
+        );
+        assert_eq!(
+            usage_placeholder(&FetchError::Auth(AuthError::Missing)),
+            "—"
         );
     }
 }

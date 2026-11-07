@@ -511,7 +511,7 @@ impl GrokBotMonitor {
                 "This applet no longer reads usage. Grok Build and Grok Bot share one weekly pool, shown once per account on Grok Monitor.",
             )))
             .push(padded(text::body(
-                "The work account is labeled sim sys. The personal account is labeled pers.",
+                "The work account is labeled Grok (sim sys). The personal account is labeled Grok (pers).",
             )))
             .push(padded(text::caption(
                 "Remove this applet: COSMIC Settings → Desktop → Panel → Applets. Select Grok Bot Monitor and remove it. The package does not change your panel layout.",

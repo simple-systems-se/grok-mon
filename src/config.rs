@@ -26,6 +26,10 @@ pub struct Config {
     pub show_pace: bool,
     #[serde(default)]
     pub account_labels: BTreeMap<String, String>,
+    /// Account id → `work` or `personal`. Applied only when that role already
+    /// belongs to exactly one other discovered account.
+    #[serde(default)]
+    pub account_links: BTreeMap<String, String>,
 }
 
 impl Default for Config {
@@ -37,6 +41,7 @@ impl Default for Config {
             show_remaining: false,
             show_pace: true,
             account_labels: BTreeMap::new(),
+            account_links: BTreeMap::new(),
         }
     }
 }

@@ -30,6 +30,14 @@
     <content_attribute id="social-info">mild</content_attribute>
   </content_rating>
   <releases>
+    <release version="0.3.3" date="2026-11-07">
+      <description>
+        <p>
+          Read an additional Grok CLI home so a personal grok login can supply
+          weekly usage without replacing the default ~/.grok session.
+        </p>
+      </description>
+    </release>
     <release version="0.3.2" date="2026-11-07">
       <description>
         <p>

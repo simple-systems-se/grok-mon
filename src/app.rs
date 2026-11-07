@@ -349,7 +349,8 @@ impl GrokMonitor {
         self.fetch_started = Some(std::time::Instant::now());
         let links = self.config.account_links.clone();
         let labels = self.config.account_labels.clone();
-        Task::perform(fetch_all_usage(links, labels), |result| {
+        let homes = crate::auth::auth_homes(&self.config.cli_homes);
+        Task::perform(fetch_all_usage(links, labels, homes), |result| {
             cosmic::action::Action::App(Message::UsageFetched(result))
         })
     }

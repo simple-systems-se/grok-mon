@@ -247,6 +247,31 @@ attached to the other role by email. It does not run from the panel caption.
 An unmapped sign-in stays visible. The weekly percent is the
 CLI login’s shared pool; a profile with no CLI login stays at `—`.
 
+The official `grok` CLI stores one session in `$GROK_HOME/auth.json`
+(default `~/.grok/auth.json`). `grok login` replaces that file. A second
+weekly account is a second home, not a second login into the default home:
+
+```sh
+mkdir -p ~/.grok-personal
+GROK_HOME="$HOME/.grok-personal" grok login
+```
+
+Sign in as the personal account in the browser. Do not run `grok login`
+without `GROK_HOME`, and do not copy `auth.json` over `~/.grok/auth.json`.
+Then add that directory to Grok Monitor config `cli_homes` (app id
+`io.github.simple-systems-se.grok-mon`, version 1):
+
+```ron
+[
+    "~/.grok-personal",
+]
+```
+
+The default home is still read. If the new sign-in does not share an email
+with the personal profile, it appears as its own chip. Open that chip and
+choose **Grok (pers)** under **Same weekly pool**. The work sign-in stays on
+**Grok (sim sys)**. Do not set `GROK_HOME` for the panel process.
+
 ## Retired Grok Bot Monitor
 
 `cosmic-ext-applet-grok-monitor --product=bot` no longer fetches usage. If the

@@ -1235,4 +1235,48 @@ mod tests {
                 .is_none()
         );
     }
+
+    #[test]
+    fn a_second_cli_login_can_join_personal_without_moving_work() {
+        let seen = vec![
+            unspecified("https://auth.x.ai::work", None, SourceKind::Cli),
+            unspecified("https://auth.x.ai::pers", None, SourceKind::Cli),
+            unspecified("bot-work", Some("work@example.com"), SourceKind::Bot),
+            unspecified("bot-pers", Some("pers@example.com"), SourceKind::Bot),
+        ];
+        let labels = BTreeMap::from([
+            ("https://auth.x.ai::work".into(), "build".into()),
+            ("bot-work".into(), "Grok (sim sys)".into()),
+            ("bot-pers".into(), "Grok (pers)".into()),
+        ]);
+        let links = BTreeMap::from([
+            ("https://auth.x.ai::work".into(), "work".into()),
+            ("https://auth.x.ai::pers".into(), "personal".into()),
+        ]);
+        let resolved = resolve_monitored_accounts(seen, &links, &labels);
+        assert_eq!(resolved.len(), 2);
+        let work = resolved
+            .iter()
+            .find(|account| account.role == AccountRole::Work)
+            .unwrap();
+        let pers = resolved
+            .iter()
+            .find(|account| account.role == AccountRole::Personal)
+            .unwrap();
+        assert_eq!(work.cli_id.as_deref(), Some("https://auth.x.ai::work"));
+        assert_eq!(pers.cli_id.as_deref(), Some("https://auth.x.ai::pers"));
+        let readings = [
+            UsageReading {
+                bearer_id: "https://auth.x.ai::work".into(),
+                percent: 10.0,
+            },
+            UsageReading {
+                bearer_id: "https://auth.x.ai::pers".into(),
+                percent: 55.0,
+            },
+        ];
+        assert_eq!(assigned_percent(work, &readings), Some(10.0));
+        assert_eq!(assigned_percent(pers, &readings), Some(55.0));
+        assert_ne!(assigned_percent(work, &readings), Some(65.0));
+    }
 }

@@ -1,9 +1,10 @@
 use crate::accounts::{self, AccountRole, SeenAccount, SourceKind};
-use crate::auth::{AuthError, AuthIdentity, Bearer, load_bearers};
+use crate::auth::{AuthError, AuthIdentity, Bearer, load_bearers_from_homes};
 use chrono::{DateTime, Utc};
 use futures_util::future::join_all;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 
 const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const SETTINGS_URL: &str = "https://cli-chat-proxy.grok.com/v1/settings";
@@ -267,8 +268,9 @@ fn auth_headers(token: &str) -> Result<reqwest::header::HeaderMap, FetchError> {
 pub async fn fetch_all_usage(
     links: BTreeMap<String, String>,
     labels: BTreeMap<String, String>,
+    cli_homes: Vec<PathBuf>,
 ) -> Result<Vec<BuildAccountFetch>, FetchError> {
-    let cli_result = load_bearers();
+    let cli_result = load_bearers_from_homes(&cli_homes);
     let bot_hints = bot_identity_hints().await;
 
     let bearers = match cli_result {

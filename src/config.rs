@@ -30,6 +30,10 @@ pub struct Config {
     /// belongs to exactly one other discovered account.
     #[serde(default)]
     pub account_links: BTreeMap<String, String>,
+    /// Extra Grok CLI homes. Each directory's `auth.json` is read in addition
+    /// to `~/.grok`. This does not replace the default home.
+    #[serde(default)]
+    pub cli_homes: Vec<String>,
 }
 
 impl Default for Config {
@@ -42,6 +46,7 @@ impl Default for Config {
             show_pace: true,
             account_labels: BTreeMap::new(),
             account_links: BTreeMap::new(),
+            cli_homes: Vec::new(),
         }
     }
 }

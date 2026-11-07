@@ -1,9 +1,10 @@
 use crate::accounts::{self, AccountRole, SeenAccount, SourceKind};
-use crate::auth::{AuthError, AuthIdentity, Bearer, load_bearers};
+use crate::auth::{AuthError, AuthIdentity, Bearer, load_bearers_from_homes};
 use chrono::{DateTime, Utc};
 use futures_util::future::join_all;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 
 const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const SETTINGS_URL: &str = "https://cli-chat-proxy.grok.com/v1/settings";
@@ -264,8 +265,12 @@ fn auth_headers(token: &str) -> Result<reqwest::header::HeaderMap, FetchError> {
     Ok(headers)
 }
 
-pub async fn fetch_all_usage() -> Result<Vec<BuildAccountFetch>, FetchError> {
-    let cli_result = load_bearers();
+pub async fn fetch_all_usage(
+    links: BTreeMap<String, String>,
+    labels: BTreeMap<String, String>,
+    cli_homes: Vec<PathBuf>,
+) -> Result<Vec<BuildAccountFetch>, FetchError> {
+    let cli_result = load_bearers_from_homes(&cli_homes);
     let bot_hints = bot_identity_hints().await;
 
     let bearers = match cli_result {
@@ -289,7 +294,7 @@ pub async fn fetch_all_usage() -> Result<Vec<BuildAccountFetch>, FetchError> {
     }
     seen.extend(bot_hints);
 
-    let merged = accounts::merge_seen(seen);
+    let merged = accounts::resolve_monitored_accounts(seen, &links, &labels);
     if merged.is_empty() {
         return Err(FetchError::Auth(AuthError::Missing));
     }

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use zeroize::Zeroize;
@@ -80,13 +80,82 @@ pub fn load_bearer() -> Result<Bearer, AuthError> {
     bearers.drain(..).next().ok_or(AuthError::Missing)
 }
 
-/// Every unexpired Grok Build token, xAI entries first.
+/// Every unexpired Grok Build token in the default home, xAI entries first.
 pub fn load_bearers() -> Result<Vec<Bearer>, AuthError> {
-    let path = grok_home().join("auth.json");
-    let mut raw = fs::read_to_string(&path).map_err(|_| AuthError::Missing)?;
-    let result = bearers_from_auth_json(&raw);
-    raw.zeroize();
-    result
+    load_bearers_from_homes(&[grok_home()])
+}
+
+/// Read each home's `auth.json`. The first home is the default `~/.grok`
+/// (or `$GROK_HOME`). Later homes are extra official CLI profiles. A repeated
+/// account id keeps the earlier token, so the default home stays the one
+/// already linked on the panel.
+pub fn load_bearers_from_homes(homes: &[PathBuf]) -> Result<Vec<Bearer>, AuthError> {
+    let mut all = Vec::new();
+    let mut seen_ids = HashSet::new();
+    let mut saw_expired = false;
+    let mut saw_invalid = false;
+    for home in homes {
+        let path = home.join("auth.json");
+        let mut raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(_) => continue,
+        };
+        let parsed = bearers_from_auth_json(&raw);
+        raw.zeroize();
+        match parsed {
+            Ok(bearers) => {
+                for bearer in bearers {
+                    if seen_ids.insert(bearer.id.clone()) {
+                        all.push(bearer);
+                    }
+                }
+            }
+            Err(AuthError::Expired) => saw_expired = true,
+            Err(AuthError::Missing) => {}
+            Err(AuthError::Invalid) => saw_invalid = true,
+        }
+    }
+    if !all.is_empty() {
+        all.sort_by(|a, b| {
+            email_sort_key(&a.identity.email)
+                .cmp(&email_sort_key(&b.identity.email))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        return Ok(all);
+    }
+    if saw_expired {
+        Err(AuthError::Expired)
+    } else if saw_invalid {
+        Err(AuthError::Invalid)
+    } else {
+        Err(AuthError::Missing)
+    }
+}
+
+pub fn auth_homes(extra: &[String]) -> Vec<PathBuf> {
+    let mut homes = vec![grok_home()];
+    for raw in extra {
+        let path = expand_home_path(raw);
+        if path.as_os_str().is_empty() {
+            continue;
+        }
+        if homes.iter().any(|existing| existing == &path) {
+            continue;
+        }
+        homes.push(path);
+    }
+    homes
+}
+
+fn expand_home_path(raw: &str) -> PathBuf {
+    let trimmed = raw.trim();
+    if trimmed == "~" {
+        return dirs_home();
+    }
+    if let Some(rest) = trimmed.strip_prefix("~/") {
+        return dirs_home().join(rest);
+    }
+    PathBuf::from(trimmed)
 }
 
 #[cfg(test)]
@@ -237,5 +306,52 @@ mod tests {
         assert_eq!(emails, ["a@x.ai", "b@x.ai"]);
         assert_eq!(bearers[0].token, "token-a");
         assert_eq!(bearers[1].token, "token-b");
+    }
+
+    #[test]
+    fn second_home_is_added_and_the_default_home_wins_a_duplicate_id() {
+        let root = std::env::temp_dir().join(format!(
+            "grok-mon-auth-homes-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let primary = root.join("default");
+        let personal = root.join("personal");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&personal).unwrap();
+        std::fs::write(
+            primary.join("auth.json"),
+            r#"{"https://auth.x.ai::work":{"key":"work-token","expires_at":"2099-01-01T00:00:00Z","email":"work@example.com"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            personal.join("auth.json"),
+            r#"{"https://auth.x.ai::work":{"key":"should-not-replace","expires_at":"2099-01-01T00:00:00Z","email":"work@example.com"},"https://auth.x.ai::pers":{"key":"pers-token","expires_at":"2099-01-01T00:00:00Z","email":"pers@example.com"}}"#,
+        )
+        .unwrap();
+        let bearers = load_bearers_from_homes(&[primary, personal]).unwrap();
+        let work = bearers
+            .iter()
+            .find(|bearer| bearer.id == "https://auth.x.ai::work")
+            .unwrap();
+        let pers = bearers
+            .iter()
+            .find(|bearer| bearer.id == "https://auth.x.ai::pers")
+            .unwrap();
+        assert_eq!(work.token, "work-token");
+        assert_eq!(pers.token, "pers-token");
+        assert_eq!(bearers.len(), 2);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tilde_extra_home_expands_and_default_home_is_not_repeated() {
+        let homes = auth_homes(&["~/.grok-personal".into(), "~/.grok".into()]);
+        assert_eq!(homes[0], dirs_home().join(".grok"));
+        assert_eq!(homes[1], dirs_home().join(".grok-personal"));
+        assert_eq!(homes.len(), 2);
     }
 }

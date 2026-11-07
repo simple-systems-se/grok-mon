@@ -238,8 +238,9 @@ choose **Grok (sim sys)** or **Grok (pers)** under **Same weekly pool**, or writ
 the same choice into COSMIC config. The entry is `account_links` for app id
 `io.github.simple-systems-se.grok-mon`, version 1. Its value is a map from the
 sign-in’s account id to `work` or `personal`. The join runs only when exactly
-one discovered profile already has that role, and it does not run from the
-panel caption. An unmapped sign-in stays visible. The weekly percent is the
+one discovered profile already has that role and the sign-in is not already
+attached to the other role by email. It does not run from the panel caption.
+An unmapped sign-in stays visible. The weekly percent is the
 CLI login’s shared pool; a profile with no CLI login stays at `—`.
 
 ## Retired Grok Bot Monitor

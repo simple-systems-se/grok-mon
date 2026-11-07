@@ -153,6 +153,10 @@ pub fn apply_explicit_links(
         if targets.len() != 1 {
             continue;
         }
+        let source_role = merged[source_idx].role;
+        if source_role != AccountRole::Unspecified && source_role != role {
+            continue;
+        }
         let target_idx = targets[0];
         let source_cli = merged[source_idx].cli_id.clone();
         let target_cli = merged[target_idx].cli_id.clone();
@@ -920,6 +924,30 @@ mod tests {
             .find(|account| account.cli_id.as_deref() == Some("cli-extra"))
             .unwrap();
         assert_eq!(caption_for(&view(extra), &labels).as_deref(), Some("build"));
+    }
+
+    #[test]
+    fn email_match_is_not_pulled_onto_the_other_role() {
+        let seen = vec![
+            cli("cli-build", "pers@example.com"),
+            bot("bot-work", "work@example.com", "Grok Bot Work"),
+            bot("bot-pers", "pers@example.com", "Grok Bot"),
+        ];
+        let linked = apply_explicit_links(merge_seen(seen), &links(&[("cli-build", "work")]));
+        assert_eq!(linked.len(), 2);
+        let pers = linked
+            .iter()
+            .find(|account| account.role == AccountRole::Personal)
+            .unwrap();
+        assert_eq!(pers.cli_id.as_deref(), Some("cli-build"));
+        assert!(
+            linked
+                .iter()
+                .find(|account| account.role == AccountRole::Work)
+                .unwrap()
+                .cli_id
+                .is_none()
+        );
     }
 
     #[test]

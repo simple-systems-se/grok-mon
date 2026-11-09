@@ -55,6 +55,7 @@ pub struct GrokMonitor {
     open_error: Option<String>,
     fetching: bool,
     fetch_started: Option<std::time::Instant>,
+    home_reports: Vec<crate::auth::CliHomeReport>,
 }
 
 impl Default for GrokMonitor {
@@ -72,6 +73,7 @@ impl Default for GrokMonitor {
             open_error: None,
             fetching: false,
             fetch_started: None,
+            home_reports: Vec::new(),
         }
     }
 }
@@ -83,7 +85,7 @@ pub enum Message {
     TogglePopup(String),
     PopupClosed(Id),
     Size(Size),
-    UsageFetched(Result<Vec<BuildAccountFetch>, FetchError>),
+    UsageFetched(crate::billing::UsageLoad),
     OpenUsage,
     CopyPercent,
     ShowSettings,
@@ -181,10 +183,11 @@ impl cosmic::Application for GrokMonitor {
                 return self.start_fetch();
             }
             Message::Clock => {}
-            Message::UsageFetched(result) => {
+            Message::UsageFetched(load) => {
                 self.fetching = false;
                 self.fetch_started = None;
-                match result {
+                self.home_reports = load.homes;
+                match load.result {
                     Ok(fetches) => self.merge_fetches(fetches),
                     Err(err) => {
                         self.accounts = vec![AccountChip {
@@ -194,6 +197,7 @@ impl cosmic::Application for GrokMonitor {
                         self.selected = None;
                     }
                 }
+                self.note_where_extra_logins_landed();
             }
             Message::TogglePopup(account_id) => {
                 if self.popup.is_some() && self.selected.as_ref() == Some(&account_id) {
@@ -350,8 +354,8 @@ impl GrokMonitor {
         let links = self.config.account_links.clone();
         let labels = self.config.account_labels.clone();
         let homes = crate::auth::auth_homes(&self.config.cli_homes);
-        Task::perform(fetch_all_usage(links, labels, homes), |result| {
-            cosmic::action::Action::App(Message::UsageFetched(result))
+        Task::perform(fetch_all_usage(links, labels, homes), |load| {
+            cosmic::action::Action::App(Message::UsageFetched(load))
         })
     }
 
@@ -545,8 +549,9 @@ impl GrokMonitor {
         }
 
         if let Some(error) = error {
-            let status =
-                chip_status_line(chip.map(|account| account.id.as_str()).unwrap_or(""), error);
+            let status = self.personal_login_line(chip).unwrap_or_else(|| {
+                chip_status_line(chip.map(|account| account.id.as_str()).unwrap_or(""), error)
+            });
             col = col.push(padded(text::caption(status).class(theme::Text::Color({
                 let c = theme::active().cosmic().destructive_color();
                 c.into()
@@ -762,6 +767,40 @@ impl GrokMonitor {
             ))
             .spacing(8)
             .into()
+    }
+
+    fn note_where_extra_logins_landed(&mut self) {
+        for report in &mut self.home_reports {
+            report.refine_attachment(|id| {
+                let Some(account) = self.accounts.iter().find(|account| {
+                    account.id == id || account.aliases.iter().any(|alias| alias == id)
+                }) else {
+                    return crate::auth::IdPlace::Unknown;
+                };
+                match account.role {
+                    AccountRole::Personal => crate::auth::IdPlace::Personal,
+                    AccountRole::Work => crate::auth::IdPlace::OtherAccount,
+                    AccountRole::Unspecified => crate::auth::IdPlace::SeparateChip,
+                }
+            });
+        }
+    }
+
+    fn personal_login_line(&self, chip: Option<&AccountChip>) -> Option<String> {
+        let chip = chip?;
+        if chip.role != AccountRole::Personal
+            || chip.snapshot.is_some()
+            || !matches!(chip.error, Some(FetchError::Auth(_)))
+        {
+            return None;
+        }
+        if self.config.cli_homes.is_empty() {
+            return None;
+        }
+        self.home_reports
+            .iter()
+            .skip(1)
+            .find_map(|report| report.personal_explanation())
     }
 
     fn panel_caption(&self, account: &AccountChip) -> Option<String> {

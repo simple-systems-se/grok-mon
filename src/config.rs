@@ -26,6 +26,14 @@ pub struct Config {
     pub show_pace: bool,
     #[serde(default)]
     pub account_labels: BTreeMap<String, String>,
+    /// Account id → `work` or `personal`. Applied only when that role already
+    /// belongs to exactly one other discovered account.
+    #[serde(default)]
+    pub account_links: BTreeMap<String, String>,
+    /// Extra Grok CLI homes. Each directory's `auth.json` is read in addition
+    /// to `~/.grok`. This does not replace the default home.
+    #[serde(default)]
+    pub cli_homes: Vec<String>,
 }
 
 impl Default for Config {
@@ -37,6 +45,8 @@ impl Default for Config {
             show_remaining: false,
             show_pace: true,
             account_labels: BTreeMap::new(),
+            account_links: BTreeMap::new(),
+            cli_homes: Vec::new(),
         }
     }
 }
@@ -124,5 +134,109 @@ mod tests {
     #[test]
     fn pace_defaults_on() {
         assert!(Config::default().show_pace);
+    }
+
+    fn load_ron(dir: &std::path::Path, links: &str, labels: &str) -> Config {
+        let name = "io.github.simple-systems-se.grok-mon-link-test";
+        let config_dir = dir.join("cosmic").join(name).join("v1");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(config_dir.join("account_links"), links).unwrap();
+        std::fs::write(config_dir.join("account_labels"), labels).unwrap();
+        let ctx = cosmic::cosmic_config::Config::with_custom_path(
+            name,
+            Config::VERSION,
+            dir.to_path_buf(),
+        )
+        .unwrap();
+        match Config::get_entry(&ctx) {
+            Ok(config) => config,
+            Err((_errors, config)) => config,
+        }
+    }
+
+    #[test]
+    fn quoted_ron_link_reaches_the_merge_for_a_login_without_email() {
+        let dir = std::env::temp_dir().join(format!(
+            "grok-mon-ron-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let build_id = "https://auth.x.ai::example-build";
+        let config = load_ron(
+            &dir,
+            &format!("{{\n    \"{build_id}\": \"work\",\n}}\n"),
+            &format!(
+                "{{\n    \"{build_id}\": \"build\",\n    \"bot-work\": \"Grok (sim sys)\",\n    \"bot-pers\": \"Grok (pers)\",\n}}\n"
+            ),
+        );
+        assert_eq!(
+            config.account_links.get(build_id).map(String::as_str),
+            Some("work")
+        );
+        let seen = vec![
+            crate::accounts::SeenAccount {
+                id: build_id.into(),
+                email: None,
+                identity: None,
+                role: crate::accounts::AccountRole::Unspecified,
+                kind: crate::accounts::SourceKind::Cli,
+            },
+            crate::accounts::SeenAccount {
+                id: "bot-work".into(),
+                email: Some("work@example.com".into()),
+                identity: Some("work@example.com".into()),
+                role: crate::accounts::AccountRole::Unspecified,
+                kind: crate::accounts::SourceKind::Bot,
+            },
+            crate::accounts::SeenAccount {
+                id: "bot-pers".into(),
+                email: Some("pers@example.com".into()),
+                identity: Some("pers@example.com".into()),
+                role: crate::accounts::AccountRole::Unspecified,
+                kind: crate::accounts::SourceKind::Bot,
+            },
+        ];
+        let resolved = crate::accounts::resolve_monitored_accounts(
+            seen,
+            &config.account_links,
+            &config.account_labels,
+        );
+        assert_eq!(resolved.len(), 2);
+        assert!(resolved.iter().any(|account| {
+            account.role == crate::accounts::AccountRole::Work
+                && account.cli_id.as_deref() == Some(build_id)
+        }));
+        assert!(resolved.iter().any(|account| {
+            account.role == crate::accounts::AccountRole::Personal && account.cli_id.is_none()
+        }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unquoted_ron_role_does_not_load_as_a_link() {
+        let dir = std::env::temp_dir().join(format!(
+            "grok-mon-ron-bad-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let config = load_ron(
+            &dir,
+            "{\n    \"cli-build\": work,\n}\n",
+            "{\n    \"cli-build\": \"build\",\n}\n",
+        );
+        assert!(config.account_links.is_empty());
+        assert_eq!(
+            config.account_labels.get("cli-build").map(String::as_str),
+            Some("build")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

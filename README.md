@@ -7,7 +7,7 @@ usage again. The chip uses the same billing endpoint as `/usage` in the Grok
 CLI (`creditUsagePercent`). A separate applet, **Grok API Monitor**, still shows
 remaining prepaid dollars for xAI API tokens.
 
-The work account is labeled **sim sys**. The personal account is labeled **pers**.
+The work account is labeled **Grok (sim sys)**. The personal account is labeled **Grok (pers)**.
 
 **Grok Bot Monitor** is a retired panel slot. It no longer polls usage. Remove
 it from the panel after updating (see below). That step is done in COSMIC
@@ -133,8 +133,8 @@ Grok Build and Grok Bot now share one weekly pool. After you install or upgrade:
 2. Remove **Grok Bot Monitor** if it is on the panel. This is a manual step.
    The package keeps the old desktop file so the slot does not go blank, and
    that slot now only tells you to remove it. It does not fetch usage.
-3. Keep **Grok Monitor**. It shows one chip for the work account (**sim sys**)
-   and one for the personal account (**pers**).
+3. Keep **Grok Monitor**. It shows one chip for the work account (**Grok (sim sys)**)
+   and one for the personal account (**Grok (pers)**).
 4. Keep **Grok API Monitor** if you watch prepaid API credits. That applet is
    unchanged.
 5. If the updated applet does not show up, run `pkill cosmic-panel`.
@@ -142,7 +142,9 @@ Grok Build and Grok Bot now share one weekly pool. After you install or upgrade:
 Sign-in files are left in place: `~/.grok/auth.json`, `~/.config/Grok Bot*`,
 and `~/.config/grok-mon-api/credentials.json`. Settings already stored for
 Grok Monitor stay (poll interval, sparkline, used/remaining, pace). A saved
-panel label of `work` becomes `sim sys`, and `personal` becomes `pers`. Any
+panel label of `work`, `sim sys`, or `bot (work)` becomes `Grok (sim sys)`, and
+`personal`, `pers`, or `bot (pers)` becomes `Grok (pers)`. A saved label of
+`build` is kept until that sign-in is explicitly joined to an account. Any
 other custom label is kept. Labels that lived only on the Bot applet are copied
 onto Grok Monitor when that chip does not already have one.
 
@@ -192,11 +194,15 @@ Panel states:
 | Chip | Meaning |
 |------|---------|
 | `…` | Fetching |
-| `—` | Not signed in, or the session has expired |
+| `—` | No Grok CLI login is attached to this chip, or that CLI session expired |
 | `?` | Request failed, and there is no previous reading |
 | dimmed percent | Last good reading; the latest poll failed |
 
-If you see `—` on Grok Monitor, run `grok login` and wait for the next poll.
+If you see `—` on Grok Monitor, that chip has no Grok CLI login attached.
+A Grok Bot profile can still be present. The mark is not a sign-out check.
+Join the Build sign-in under **Same weekly pool** when it belongs to that
+profile. The weekly percent is the CLI reading for the joined profile only.
+Run `grok login` when the CLI session itself is missing or expired.
 On Grok API Monitor, add a Management API key (see below).
 
 ## Accounts
@@ -206,8 +212,8 @@ not add their percents together.
 
 | Account | Panel label | How it is recognized |
 |---------|-------------|----------------------|
-| Work | `sim sys` | Grok Bot profile directory `Grok Bot Work`, or a saved label `work` / `sim sys` |
-| Personal | `pers` | Grok Bot profile directory `Grok Bot`, or a saved label `personal` / `pers` |
+| Work | `Grok (sim sys)` | Grok Bot profile directory `Grok Bot Work`, or a saved label `work` / `sim sys` / `bot (work)` |
+| Personal | `Grok (pers)` | Grok Bot profile directory `Grok Bot`, or a saved label `personal` / `pers` / `bot (pers)` |
 
 The same email signed in to both the Grok CLI and Grok Bot is **one** chip.
 The percent is that account’s `creditUsagePercent` from
@@ -226,9 +232,45 @@ still listed so it is not dropped. Its chip stays at `—` until `grok login`
 for that account. This build does not fall back to the old Bot percent.
 
 When exactly two accounts are present and only one role is known, the other
-becomes the partner label (`sim sys` or `pers`). A third account is not
-guessed. A custom panel label other than `work` or `personal` is left as you
-set it.
+becomes the partner label (`Grok (sim sys)` or `Grok (pers)`). A third account
+is not guessed. A custom panel label other than the legacy work and personal
+captions is left as you set it.
+
+A Grok CLI sign-in whose email is missing, or different from the Grok Bot
+profile, stays on its own chip. To join it, open that chip’s **Settings** and
+choose **Grok (sim sys)** or **Grok (pers)** under **Same weekly pool**, or write
+the same choice into COSMIC config. The entry is `account_links` for app id
+`io.github.simple-systems-se.grok-mon`, version 1. Its value is a map from the
+sign-in’s account id to `work` or `personal`. The join runs only when exactly
+one discovered profile already has that role and the sign-in is not already
+attached to the other role by email. It does not run from the panel caption.
+An unmapped sign-in stays visible. The weekly percent is the
+CLI login’s shared pool; a profile with no CLI login stays at `—`.
+
+The official `grok` CLI stores one session in `$GROK_HOME/auth.json`
+(default `~/.grok/auth.json`). `grok login` replaces that file. A second
+weekly account is a second home, not a second login into the default home:
+
+```sh
+mkdir -p ~/.grok-personal
+GROK_HOME="$HOME/.grok-personal" grok login
+```
+
+Sign in as the personal account in the browser. Do not run `grok login`
+without `GROK_HOME`, and do not copy `auth.json` over `~/.grok/auth.json`.
+Then add that directory to Grok Monitor config `cli_homes` (app id
+`io.github.simple-systems-se.grok-mon`, version 1):
+
+```ron
+[
+    "~/.grok-personal",
+]
+```
+
+The default home is still read. If the new sign-in does not share an email
+with the personal profile, it appears as its own chip. Open that chip and
+choose **Grok (pers)** under **Same weekly pool**. The work sign-in stays on
+**Grok (sim sys)**. Do not set `GROK_HOME` for the panel process.
 
 ## Retired Grok Bot Monitor
 
@@ -346,7 +388,8 @@ Open the popup and choose **Settings**.
 | Percent on panel | on / off | on |
 | Amount on panel (API) | on / off | on |
 | Pace in popup (Grok) | on / off | on |
-| Panel label | text | `sim sys`, `pers`, account email, or API key name |
+| Panel label | text | `Grok (sim sys)`, `Grok (pers)`, account email, or API key name |
+| Same weekly pool | separate / work / personal | separate |
 | Panel number | used / remaining | used |
 
 The ring fill matches the panel number (used or remaining). Color is always
@@ -368,7 +411,7 @@ Grok Monitor reads the Grok CLI’s OIDC bearer from `~/.grok/auth.json` (or
 entries written by `grok login`. Each unexpired entry is its own account.
 The bearer is sent only to the Grok CLI billing and settings endpoints.
 
-To tell `sim sys` from `pers`, the applet also reads Grok Bot profile
+To tell `Grok (sim sys)` from `Grok (pers)`, the applet also reads Grok Bot profile
 directories (`~/.config/Grok Bot*`, plus `GROK_BOT_CONFIG_DIRS`). It decrypts
 `sand-secrets.json` only far enough to read the account email and id, then
 drops the token. It does not refresh tokens, does not change which account

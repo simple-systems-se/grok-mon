@@ -30,6 +30,40 @@
     <content_attribute id="social-info">mild</content_attribute>
   </content_rating>
   <releases>
+    <release version="0.3.4" date="2026-11-09">
+      <description>
+        <p>
+          Explain why an extra Grok CLI home did not fill the personal chip,
+          without showing the login itself.
+        </p>
+      </description>
+    </release>
+    <release version="0.3.3" date="2026-11-07">
+      <description>
+        <p>
+          Read an additional Grok CLI home so a personal grok login can supply
+          weekly usage without replacing the default ~/.grok session.
+        </p>
+      </description>
+    </release>
+    <release version="0.3.2" date="2026-11-07">
+      <description>
+        <p>
+          Apply a saved work or personal link after legacy profile captions
+          establish that role. A chip with no Grok CLI login stays blank
+          instead of claiming the account is signed out.
+        </p>
+      </description>
+    </release>
+    <release version="0.3.1" date="2026-11-07">
+      <description>
+        <p>
+          Join a Grok CLI sign-in to the work or personal account only when
+          that mapping is saved. Panel captions are Grok (sim sys) and
+          Grok (pers). An unmapped sign-in stays on its own chip.
+        </p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-11-06">
       <description>
         <p>

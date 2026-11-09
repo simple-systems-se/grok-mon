@@ -1,9 +1,10 @@
 use crate::accounts::{self, AccountRole, SeenAccount, SourceKind};
-use crate::auth::{AuthError, AuthIdentity, Bearer, load_bearers};
+use crate::auth::{AuthError, AuthIdentity, Bearer, CliHomeReport, load_cli_homes};
 use chrono::{DateTime, Utc};
 use futures_util::future::join_all;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 
 const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const SETTINGS_URL: &str = "https://cli-chat-proxy.grok.com/v1/settings";
@@ -264,13 +265,30 @@ fn auth_headers(token: &str) -> Result<reqwest::header::HeaderMap, FetchError> {
     Ok(headers)
 }
 
-pub async fn fetch_all_usage() -> Result<Vec<BuildAccountFetch>, FetchError> {
-    let cli_result = load_bearers();
+#[derive(Debug, Clone)]
+pub struct UsageLoad {
+    pub result: Result<Vec<BuildAccountFetch>, FetchError>,
+    pub homes: Vec<CliHomeReport>,
+}
+
+pub async fn fetch_all_usage(
+    links: BTreeMap<String, String>,
+    labels: BTreeMap<String, String>,
+    cli_homes: Vec<PathBuf>,
+) -> UsageLoad {
+    let loaded = load_cli_homes(&cli_homes);
+    let cli_result = loaded.bearers;
+    let homes = loaded.homes;
     let bot_hints = bot_identity_hints().await;
 
     let bearers = match cli_result {
         Ok(bearers) => bearers,
-        Err(err) if bot_hints.is_empty() => return Err(FetchError::Auth(err)),
+        Err(err) if bot_hints.is_empty() => {
+            return UsageLoad {
+                result: Err(FetchError::Auth(err)),
+                homes,
+            };
+        }
         Err(err) => {
             tracing::info!("Grok CLI auth unavailable ({err}); account list has no usage yet");
             Vec::new()
@@ -289,13 +307,24 @@ pub async fn fetch_all_usage() -> Result<Vec<BuildAccountFetch>, FetchError> {
     }
     seen.extend(bot_hints);
 
-    let merged = accounts::merge_seen(seen);
+    let merged = accounts::resolve_monitored_accounts(seen, &links, &labels);
     if merged.is_empty() {
-        return Err(FetchError::Auth(AuthError::Missing));
+        return UsageLoad {
+            result: Err(FetchError::Auth(AuthError::Missing)),
+            homes,
+        };
     }
 
     let client = if merged.iter().any(|account| account.cli_id.is_some()) {
-        Some(http_client()?)
+        match http_client() {
+            Ok(client) => Some(client),
+            Err(err) => {
+                return UsageLoad {
+                    result: Err(err),
+                    homes,
+                };
+            }
+        }
     } else {
         None
     };
@@ -321,7 +350,10 @@ pub async fn fetch_all_usage() -> Result<Vec<BuildAccountFetch>, FetchError> {
             }
         }
     });
-    Ok(join_all(fetches).await)
+    UsageLoad {
+        result: Ok(join_all(fetches).await),
+        homes,
+    }
 }
 
 async fn bot_identity_hints() -> Vec<SeenAccount> {

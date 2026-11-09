@@ -55,6 +55,7 @@ pub struct GrokMonitor {
     open_error: Option<String>,
     fetching: bool,
     fetch_started: Option<std::time::Instant>,
+    home_reports: Vec<crate::auth::CliHomeReport>,
 }
 
 impl Default for GrokMonitor {
@@ -72,6 +73,7 @@ impl Default for GrokMonitor {
             open_error: None,
             fetching: false,
             fetch_started: None,
+            home_reports: Vec::new(),
         }
     }
 }
@@ -83,7 +85,7 @@ pub enum Message {
     TogglePopup(String),
     PopupClosed(Id),
     Size(Size),
-    UsageFetched(Result<Vec<BuildAccountFetch>, FetchError>),
+    UsageFetched(crate::billing::UsageLoad),
     OpenUsage,
     CopyPercent,
     ShowSettings,
@@ -94,6 +96,7 @@ pub enum Message {
     TogglePace(bool),
     SetRemaining(bool),
     SetLabel(String),
+    SetAccountLink(Option<AccountRole>),
     ConfigChanged(Config),
 }
 
@@ -177,28 +180,14 @@ impl cosmic::Application for GrokMonitor {
         match message {
             Message::Tick => {
                 self.live = live_sessions();
-                if self.fetching {
-                    if self
-                        .fetch_started
-                        .is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(30))
-                    {
-                        tracing::warn!("usage fetch still running after 30s; retrying");
-                        self.fetching = false;
-                    } else {
-                        return Task::none();
-                    }
-                }
-                self.fetching = true;
-                self.fetch_started = Some(std::time::Instant::now());
-                return Task::perform(fetch_all_usage(), |result| {
-                    cosmic::action::Action::App(Message::UsageFetched(result))
-                });
+                return self.start_fetch();
             }
             Message::Clock => {}
-            Message::UsageFetched(result) => {
+            Message::UsageFetched(load) => {
                 self.fetching = false;
                 self.fetch_started = None;
-                match result {
+                self.home_reports = load.homes;
+                match load.result {
                     Ok(fetches) => self.merge_fetches(fetches),
                     Err(err) => {
                         self.accounts = vec![AccountChip {
@@ -208,6 +197,7 @@ impl cosmic::Application for GrokMonitor {
                         self.selected = None;
                     }
                 }
+                self.note_where_extra_logins_landed();
             }
             Message::TogglePopup(account_id) => {
                 if self.popup.is_some() && self.selected.as_ref() == Some(&account_id) {
@@ -283,6 +273,22 @@ impl cosmic::Application for GrokMonitor {
                     self.save_config();
                 }
             }
+            Message::SetAccountLink(role) => {
+                let id = self.label_account_id();
+                if !id.is_empty() {
+                    match role.and_then(accounts::link_token) {
+                        Some(token) => {
+                            self.config.account_links.insert(id, token.to_string());
+                        }
+                        None => {
+                            self.config.account_links.remove(&id);
+                        }
+                    }
+                    self.save_config();
+                    self.live = live_sessions();
+                    return self.start_fetch();
+                }
+            }
             Message::ConfigChanged(mut config) => {
                 if accounts::migrate_label_values(&mut config.account_labels) {
                     self.config = config;
@@ -331,6 +337,28 @@ impl cosmic::Application for GrokMonitor {
 }
 
 impl GrokMonitor {
+    fn start_fetch(&mut self) -> Task<cosmic::Action<Message>> {
+        if self.fetching {
+            if self
+                .fetch_started
+                .is_some_and(|started| started.elapsed() > std::time::Duration::from_secs(30))
+            {
+                tracing::warn!("usage fetch still running after 30s; retrying");
+                self.fetching = false;
+            } else {
+                return Task::none();
+            }
+        }
+        self.fetching = true;
+        self.fetch_started = Some(std::time::Instant::now());
+        let links = self.config.account_links.clone();
+        let labels = self.config.account_labels.clone();
+        let homes = crate::auth::auth_homes(&self.config.cli_homes);
+        Task::perform(fetch_all_usage(links, labels, homes), |load| {
+            cosmic::action::Action::App(Message::UsageFetched(load))
+        })
+    }
+
     fn save_config(&mut self) {
         if let Some(handler) = &self.config_handler
             && let Err(e) = self.config.write_entry(handler)
@@ -447,9 +475,7 @@ impl GrokMonitor {
                 usage_label: label,
                 color,
                 show_usage: self.config.show_percent || account.snapshot.is_none(),
-                identity: self
-                    .config
-                    .chip_identity(&account.id, account.identity.as_deref()),
+                identity: self.panel_caption(account),
                 sparkline,
                 on_press: Message::TogglePopup(account.id.clone()),
             },
@@ -523,12 +549,13 @@ impl GrokMonitor {
         }
 
         if let Some(error) = error {
-            col = col.push(padded(text::caption(error.to_string()).class(
-                theme::Text::Color({
-                    let c = theme::active().cosmic().destructive_color();
-                    c.into()
-                }),
-            )));
+            let status = self.personal_login_line(chip).unwrap_or_else(|| {
+                chip_status_line(chip.map(|account| account.id.as_str()).unwrap_or(""), error)
+            });
+            col = col.push(padded(text::caption(status).class(theme::Text::Color({
+                let c = theme::active().cosmic().destructive_color();
+                c.into()
+            }))));
         }
 
         if let Some(error) = &self.open_error {
@@ -609,6 +636,7 @@ impl GrokMonitor {
         )));
 
         col = col.push(padded(self.label_setting()));
+        col = col.push(padded(self.link_setting()));
 
         col = col.push(padded(text::body("Panel number")));
         col = col.push(padded(
@@ -701,11 +729,129 @@ impl GrokMonitor {
             .push(text::body("Panel label"))
             .push(input)
             .push(text::caption(format!(
-                "Shown on the panel chip. Empty uses {auto}. A work profile defaults to sim sys, a personal profile to pers."
+                "Shown on the panel chip. Empty uses {auto}. A work profile defaults to Grok (sim sys), a personal profile to Grok (pers)."
             )))
             .spacing(8)
             .into()
     }
+
+    fn link_setting(&self) -> Element<'_, Message> {
+        let id = self.label_account_id();
+        let current = self
+            .config
+            .account_links
+            .get(&id)
+            .map(|token| accounts::role_from_label(token))
+            .filter(|role| *role != AccountRole::Unspecified);
+        column::with_capacity(3)
+            .push(text::body("Same weekly pool"))
+            .push(
+                row::with_capacity(3)
+                    .push(link_button("Separate", None, current, &id))
+                    .push(link_button(
+                        accounts::LABEL_WORK,
+                        Some(AccountRole::Work),
+                        current,
+                        &id,
+                    ))
+                    .push(link_button(
+                        accounts::LABEL_PERSONAL,
+                        Some(AccountRole::Personal),
+                        current,
+                        &id,
+                    ))
+                    .spacing(8),
+            )
+            .push(text::caption(
+                "Confirm which account this sign-in belongs to. The chip joins that account only when exactly one profile already has the role. Other sign-ins stay on their own chips.",
+            ))
+            .spacing(8)
+            .into()
+    }
+
+    fn note_where_extra_logins_landed(&mut self) {
+        for report in &mut self.home_reports {
+            report.refine_attachment(|id| {
+                let Some(account) = self.accounts.iter().find(|account| {
+                    account.id == id || account.aliases.iter().any(|alias| alias == id)
+                }) else {
+                    return crate::auth::IdPlace::Unknown;
+                };
+                match account.role {
+                    AccountRole::Personal => crate::auth::IdPlace::Personal,
+                    AccountRole::Work => crate::auth::IdPlace::OtherAccount,
+                    AccountRole::Unspecified => crate::auth::IdPlace::SeparateChip,
+                }
+            });
+        }
+    }
+
+    fn personal_login_line(&self, chip: Option<&AccountChip>) -> Option<String> {
+        let chip = chip?;
+        if chip.role != AccountRole::Personal
+            || chip.snapshot.is_some()
+            || !matches!(chip.error, Some(FetchError::Auth(_)))
+        {
+            return None;
+        }
+        if self.config.cli_homes.is_empty() {
+            return None;
+        }
+        self.home_reports
+            .iter()
+            .skip(1)
+            .find_map(|report| report.personal_explanation())
+    }
+
+    fn panel_caption(&self, account: &AccountChip) -> Option<String> {
+        let view = accounts::AccountView {
+            id: account.id.clone(),
+            aliases: account.aliases.clone(),
+            email: account
+                .snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.email.clone())
+                .or_else(|| account.identity.clone()),
+            role: account.role,
+        };
+        accounts::caption_for(&view, &self.config.account_labels)
+            .or_else(|| account.identity.clone())
+    }
+}
+
+fn usage_placeholder(error: &FetchError) -> &'static str {
+    match error {
+        FetchError::Auth(_) => "—",
+        FetchError::Http(_) | FetchError::Parse(_) => "?",
+    }
+}
+
+fn chip_status_line(account_id: &str, error: &FetchError) -> String {
+    match error {
+        FetchError::Auth(crate::auth::AuthError::Missing) if !account_id.is_empty() => {
+            "No Grok CLI login is attached to this chip. The weekly number stays blank. This is not a sign-out check of Grok Bot.".into()
+        }
+        other => other.to_string(),
+    }
+}
+
+fn link_button<'a>(
+    label: &'a str,
+    role: Option<AccountRole>,
+    current: Option<AccountRole>,
+    id: &str,
+) -> Element<'a, Message> {
+    let selected = current == role;
+    let class = if selected {
+        theme::Button::Suggested
+    } else {
+        theme::Button::Standard
+    };
+    let mut button = button::custom(text::body(label)).class(class);
+    if !id.is_empty() {
+        button = button.on_press(Message::SetAccountLink(role));
+    }
+    button.into()
 }
 
 fn is_panel_label(value: &str) -> bool {
@@ -739,8 +885,13 @@ fn chip_label(account: &AccountChip, config: &Config) -> (String, Color) {
                 color,
             )
         }
-        (None, Some(FetchError::Auth(_))) => ("—".into(), cosmic.on_bg_color().into()),
-        (None, Some(_)) => ("?".into(), cosmic.warning_color().into()),
+        (None, Some(error)) => (
+            usage_placeholder(error).into(),
+            match error {
+                FetchError::Auth(_) => cosmic.on_bg_color().into(),
+                FetchError::Http(_) | FetchError::Parse(_) => cosmic.warning_color().into(),
+            },
+        ),
         (None, None) => ("…".into(), cosmic.on_bg_color().into()),
     }
 }
@@ -777,4 +928,46 @@ fn poll_button<'a>(secs: u64, current: u64) -> Element<'a, Message> {
 
 fn padded<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     cosmic::applet::padded_control(content).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::usage_placeholder;
+    use crate::auth::AuthError;
+    use crate::billing::FetchError;
+
+    #[test]
+    fn missing_auth_is_an_em_dash_not_a_number() {
+        assert_eq!(
+            usage_placeholder(&FetchError::Auth(AuthError::Missing)),
+            "—"
+        );
+        assert_eq!(
+            usage_placeholder(&FetchError::Auth(AuthError::Expired)),
+            "—"
+        );
+        assert_eq!(
+            usage_placeholder(&FetchError::Http("billing HTTP 500".into())),
+            "?"
+        );
+        assert_ne!(
+            usage_placeholder(&FetchError::Auth(AuthError::Missing)),
+            "0%"
+        );
+    }
+
+    #[test]
+    fn missing_cli_on_a_discovered_chip_is_not_a_sign_out() {
+        let line = super::chip_status_line("bot-pers", &FetchError::Auth(AuthError::Missing));
+        assert!(line.contains("No Grok CLI login is attached"));
+        assert!(!line.contains("not signed in"));
+        assert_eq!(
+            super::chip_status_line("", &FetchError::Auth(AuthError::Missing)),
+            "not signed in — run grok login"
+        );
+        assert_eq!(
+            usage_placeholder(&FetchError::Auth(AuthError::Missing)),
+            "—"
+        );
+    }
 }

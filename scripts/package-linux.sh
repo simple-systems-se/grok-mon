@@ -92,8 +92,8 @@ Homepage: https://github.com/simple-systems-se/grok-mon
 Depends: $depends
 Description: COSMIC panel applets for Grok usage and xAI API prepaid
  Unofficial COSMIC panel applets. Grok Monitor shows the shared weekly
- pool once per account. Grok API Monitor shows remaining prepaid dollars.
- The Grok Bot Monitor slot is retired and should be removed from the panel.
+ pool once per configured account. Grok API Monitor shows remaining prepaid
+ dollars. The Grok Bot Monitor slot is retired and should be removed from the panel.
 EOF
 
 cat >"$deb_root/DEBIAN/postinst" <<'EOF'

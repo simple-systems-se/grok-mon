@@ -69,7 +69,8 @@ install-user: build-release
     install -Dm0644 {{api-metainfo-src}} {{api-metainfo-dst}}
     @echo "Installed for this user under ~/.local. This does not change other accounts."
     @echo "Add “Grok Monitor” or “Grok API Monitor” in COSMIC Settings → Desktop → Panel → Applets."
-    @echo "Remove “Grok Bot Monitor” if it is still on the panel. Usage for each account is on Grok Monitor."
+    @echo "Grok Monitor icons come from ~/.config/cosmic/io.github.simple-systems-se.grok-mon/v1/accounts."
+    @echo "Remove “Grok Bot Monitor” if it is still on the panel. Sign in from each Grok Monitor icon."
     @echo "If an applet does not appear, run: pkill cosmic-panel"
 
 uninstall-user:

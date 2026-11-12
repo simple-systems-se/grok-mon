@@ -11,11 +11,13 @@
   <description>
     <p>
       A panel applet for the COSMIC™ desktop that shows the shared weekly Grok
-      usage pool once per account. Grok Build and Grok Bot draw from that pool.
+      usage pool once per configured account. Grok Build and Grok Bot draw from
+      that pool. Sign in from each icon.
     </p>
     <p>
-      This unofficial applet reads the Grok CLI session on disk (read-only)
-      and calls the Grok CLI billing endpoint. It is not affiliated with xAI.
+      This unofficial applet reads each configured CLI home and calls the Grok
+      CLI billing endpoint. Sign-in uses the Grok CLI device-code flow for that
+      home. It is not affiliated with xAI.
     </p>
   </description>
   <launchable type="desktop-id">io.github.simple-systems-se.grok-mon.desktop</launchable>
@@ -30,6 +32,15 @@
     <content_attribute id="social-info">mild</content_attribute>
   </content_rating>
   <releases>
+    <release version="0.4.0" date="2026-11-12">
+      <description>
+        <p>
+          Show only configured account icons. Sign in from each icon with a
+          device code for that icon's CLI home. The default icons are
+          Grok (sim sys) and Grok (pers).
+        </p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-11-06">
       <description>
         <p>

@@ -1,6 +1,6 @@
 [package]
 name = "cosmic-ext-applet-grok-monitor"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.88"
 license = "Unlicense"
@@ -26,10 +26,13 @@ secret-service = { version = "5", features = ["rt-tokio-crypto-rust"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.10"
-tokio = { version = "1", default-features = false, features = ["macros", "time"] }
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zeroize = { version = "1", features = ["alloc"] }
+
+[dev-dependencies]
+ron = "0.12"
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"

@@ -1,9 +1,8 @@
-use crate::accounts::{self, AccountRole, SeenAccount, SourceKind};
-use crate::auth::{AuthError, AuthIdentity, Bearer, load_bearers};
+use crate::auth::{AuthError, AuthIdentity, Bearer, load_bearer_from};
 use chrono::{DateTime, Utc};
 use futures_util::future::join_all;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::path::PathBuf;
 
 const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const SETTINGS_URL: &str = "https://cli-chat-proxy.grok.com/v1/settings";
@@ -29,26 +28,31 @@ pub struct UsageSnapshot {
 }
 
 #[derive(Debug, Clone)]
-pub struct BuildAccountFetch {
+pub struct IconTarget {
     pub id: String,
-    pub identity: Option<String>,
-    pub aliases: Vec<String>,
-    pub role: AccountRole,
-    pub result: Result<UsageSnapshot, FetchError>,
+    pub label: String,
+    pub cli_home: PathBuf,
 }
 
 #[derive(Debug, Clone)]
+pub struct IconUsage {
+    pub id: String,
+    pub result: Result<UsageSnapshot, FetchError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchError {
     Auth(AuthError),
     Http(String),
     Parse(String),
+    Config(String),
 }
 
 impl std::fmt::Display for FetchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Auth(e) => write!(f, "{e}"),
-            Self::Http(e) | Self::Parse(e) => write!(f, "{e}"),
+            Self::Http(e) | Self::Parse(e) | Self::Config(e) => write!(f, "{e}"),
         }
     }
 }
@@ -264,98 +268,60 @@ fn auth_headers(token: &str) -> Result<reqwest::header::HeaderMap, FetchError> {
     Ok(headers)
 }
 
-pub async fn fetch_all_usage() -> Result<Vec<BuildAccountFetch>, FetchError> {
-    let cli_result = load_bearers();
-    let bot_hints = bot_identity_hints().await;
-
-    let bearers = match cli_result {
-        Ok(bearers) => bearers,
-        Err(err) if bot_hints.is_empty() => return Err(FetchError::Auth(err)),
-        Err(err) => {
-            tracing::info!("Grok CLI auth unavailable ({err}); account list has no usage yet");
-            Vec::new()
+/// One usage fetch per configured icon, in config order.
+///
+/// Each icon reads only its own CLI home. A missing session is that icon's
+/// result. Icons are not invented from other homes, and product rows are not
+/// added onto the shared-pool percent.
+pub async fn fetch_configured_usage(icons: Vec<IconTarget>) -> Vec<IconUsage> {
+    let mut bearers = Vec::with_capacity(icons.len());
+    for icon in &icons {
+        bearers.push(load_bearer_from(&icon.cli_home));
+    }
+    let client = if bearers.iter().any(|bearer| bearer.is_ok()) {
+        match http_client() {
+            Ok(client) => Some(client),
+            Err(err) => {
+                let message = err.to_string();
+                return icons
+                    .into_iter()
+                    .zip(bearers)
+                    .map(|(icon, bearer)| IconUsage {
+                        id: icon.id,
+                        result: match bearer {
+                            Ok(_) => Err(FetchError::Http(message.clone())),
+                            Err(auth) => Err(FetchError::Auth(auth)),
+                        },
+                    })
+                    .collect();
+            }
         }
-    };
-
-    let mut seen = Vec::new();
-    for bearer in &bearers {
-        seen.push(SeenAccount {
-            id: bearer.id.clone(),
-            email: bearer.identity.email.clone(),
-            identity: bearer.identity.email.clone(),
-            role: AccountRole::Unspecified,
-            kind: SourceKind::Cli,
-        });
-    }
-    seen.extend(bot_hints);
-
-    let merged = accounts::merge_seen(seen);
-    if merged.is_empty() {
-        return Err(FetchError::Auth(AuthError::Missing));
-    }
-
-    let client = if merged.iter().any(|account| account.cli_id.is_some()) {
-        Some(http_client()?)
     } else {
         None
     };
-    let mut by_id: HashMap<String, Bearer> = bearers
-        .into_iter()
-        .map(|bearer| (bearer.id.clone(), bearer))
-        .collect();
 
-    let fetches = merged.into_iter().map(|account| {
-        let bearer = account.cli_id.as_ref().and_then(|id| by_id.remove(id));
+    let fetches = icons.into_iter().zip(bearers).map(|(icon, bearer)| {
         let client = client.clone();
         async move {
             let result = match (client, bearer) {
-                (Some(client), Some(bearer)) => fetch_bearer(&client, bearer).await,
-                _ => Err(FetchError::Auth(AuthError::Missing)),
+                (Some(client), Ok(bearer)) => fetch_bearer(&client, bearer, &icon.label).await,
+                (_, Err(auth)) => Err(FetchError::Auth(auth)),
+                (None, Ok(_)) => Err(FetchError::Http("billing client unavailable".into())),
             };
-            BuildAccountFetch {
-                id: account.id,
-                identity: account.identity.or(account.email),
-                aliases: account.aliases,
-                role: account.role,
+            IconUsage {
+                id: icon.id,
                 result,
             }
         }
     });
-    Ok(join_all(fetches).await)
-}
-
-async fn bot_identity_hints() -> Vec<SeenAccount> {
-    let loaded = match crate::bot::secrets::load_accounts().await {
-        Ok(accounts) => accounts,
-        Err(err) => {
-            tracing::info!("Grok Bot profiles skipped for account list: {err}");
-            return Vec::new();
-        }
-    };
-    loaded
-        .into_iter()
-        .map(|account| {
-            let dir_name = account
-                .config_dir
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("");
-            SeenAccount {
-                id: account.id.clone(),
-                email: account.identity.email.clone(),
-                identity: account.identity.display().map(str::to_string),
-                role: accounts::role_from_dir_name(dir_name),
-                kind: SourceKind::Bot,
-            }
-        })
-        .collect()
+    join_all(fetches).await
 }
 
 async fn fetch_bearer(
     client: &reqwest::Client,
     bearer: Bearer,
+    label: &str,
 ) -> Result<UsageSnapshot, FetchError> {
-    let id = bearer.id.clone();
     let identity_email = bearer.identity.email.clone();
     let result = match tokio::time::timeout(
         std::time::Duration::from_secs(20),
@@ -367,12 +333,12 @@ async fn fetch_bearer(
         Err(_) => Err(FetchError::Http("billing timed out".into())),
     };
     result.map(|mut snapshot| {
-        snapshot.account_id = id.clone();
+        snapshot.account_id = label.to_string();
         if snapshot.email.is_none() {
             snapshot.email = identity_email;
         }
         tracing::info!(
-            account = %id,
+            account = %label,
             percent = snapshot.percent,
             unified = snapshot.unified,
             "fetched shared Grok usage"
@@ -589,5 +555,50 @@ mod tests {
             pace.popup_line(),
             "Won't run out before reset · ~0% left at reset"
         );
+    }
+
+    #[test]
+    fn configured_icons_keep_their_own_results_in_order() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("grok-mon-fetch-{nanos}"));
+        let sim = root.join("sim");
+        let pers = root.join("pers");
+        std::fs::create_dir_all(&sim).unwrap();
+        std::fs::create_dir_all(&pers).unwrap();
+        let icons = vec![
+            IconTarget {
+                id: "0:~/.grok".into(),
+                label: "Grok (sim sys)".into(),
+                cli_home: sim,
+            },
+            IconTarget {
+                id: "1:~/.grok-personal".into(),
+                label: "Grok (pers)".into(),
+                cli_home: pers,
+            },
+        ];
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let fetched = runtime.block_on(fetch_configured_usage(icons));
+        assert_eq!(fetched.len(), 2);
+        assert_eq!(fetched[0].id, "0:~/.grok");
+        assert_eq!(fetched[1].id, "1:~/.grok-personal");
+        assert!(matches!(
+            fetched[0].result,
+            Err(FetchError::Auth(AuthError::Missing))
+        ));
+        assert!(matches!(
+            fetched[1].result,
+            Err(FetchError::Auth(AuthError::Missing))
+        ));
+        let pool = parse_credits_json(include_bytes!("../tests/fixtures/billing_shared_pool.json"))
+            .unwrap();
+        assert!((pool.percent - 12.5).abs() < f32::EPSILON);
+        assert_ne!(pool.percent, 8.0 + 3.0);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Grok Monitor
-Comment=Show shared Grok usage once per account in the COSMIC panel
+Comment=Show shared weekly Grok usage for each configured account
 Exec=cosmic-ext-applet-grok-monitor
 Terminal=false
 Type=Application

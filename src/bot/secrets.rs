@@ -382,6 +382,7 @@ pub async fn load_bearer_from_path(path: &Path) -> Result<CursorBearer, AuthErro
     bearer_after_keyring(&raw, v10_err, &passwords)
 }
 
+#[allow(dead_code)] // Account monitor no longer scans Grok Bot profiles.
 pub async fn load_accounts() -> Result<Vec<CursorAccount>, AuthError> {
     let roots = discover_config_roots();
     if roots.is_empty() {
@@ -390,6 +391,7 @@ pub async fn load_accounts() -> Result<Vec<CursorAccount>, AuthError> {
     load_accounts_from_roots(&roots).await
 }
 
+#[allow(dead_code)] // Account monitor no longer scans Grok Bot profiles.
 pub async fn load_accounts_from_roots(roots: &[PathBuf]) -> Result<Vec<CursorAccount>, AuthError> {
     if roots.is_empty() {
         return Err(AuthError::Missing);
@@ -454,6 +456,7 @@ pub async fn load_accounts_from_roots(roots: &[PathBuf]) -> Result<Vec<CursorAcc
     Ok(merge_duplicate_accounts(loaded))
 }
 
+#[allow(dead_code)] // Account monitor no longer scans Grok Bot profiles.
 pub async fn load_accounts_from_path(path: &Path) -> Result<Vec<CursorAccount>, AuthError> {
     let raw = std::fs::read_to_string(path).map_err(|_| AuthError::Missing)?;
     let v10_err = match first_matching_accounts(&raw, [OSCRYPT_V10_PASSWORD, b"".as_slice()]) {
@@ -491,6 +494,7 @@ fn keyring_names_for_path(path: &Path) -> Vec<String> {
     names
 }
 
+#[allow(dead_code)] // Account monitor no longer scans Grok Bot profiles.
 fn attach_root(mut accounts: Vec<CursorAccount>, root: &Path) -> Vec<CursorAccount> {
     let used_at = root_used_at(root);
     let running = super::roster::session_running(&session_marker_path(root));
@@ -579,6 +583,7 @@ fn uniquify_account_ids(accounts: &mut [CursorAccount]) {
     }
 }
 
+#[allow(dead_code)] // Account monitor no longer scans Grok Bot profiles.
 fn accounts_after_keyring(
     raw: &str,
     v10_err: AuthError,

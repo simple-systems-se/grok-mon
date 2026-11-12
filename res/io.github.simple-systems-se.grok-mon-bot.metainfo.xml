@@ -27,6 +27,11 @@
     <content_attribute id="social-info">mild</content_attribute>
   </content_rating>
   <releases>
+    <release version="0.4.0" date="2026-11-12">
+      <description>
+        <p>Still retired. Weekly usage stays on Grok Monitor, one chip per configured account.</p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-11-06">
       <description>
         <p>Stop polling the separate Grok Bot usage ledger. Remove this applet from the panel.</p>

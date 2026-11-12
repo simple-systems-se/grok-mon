@@ -6,6 +6,7 @@ mod billing;
 mod bot;
 mod chip;
 mod config;
+mod login;
 mod pace;
 mod ring;
 mod sessions;

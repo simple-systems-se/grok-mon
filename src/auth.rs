@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 use zeroize::Zeroize;
 
 #[derive(Debug, Clone)]
@@ -11,7 +11,7 @@ pub struct AuthIdentity {
     pub principal_type: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthError {
     Missing,
     Expired,
@@ -21,9 +21,9 @@ pub enum AuthError {
 impl std::fmt::Display for AuthError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Missing => write!(f, "not signed in — run grok login"),
-            Self::Expired => write!(f, "session expired — run grok login"),
-            Self::Invalid => write!(f, "invalid auth.json"),
+            Self::Missing => write!(f, "not signed in"),
+            Self::Expired => write!(f, "session expired"),
+            Self::Invalid => write!(f, "session file is unreadable"),
         }
     }
 }
@@ -56,41 +56,19 @@ impl Drop for Bearer {
     }
 }
 
-pub fn grok_home() -> PathBuf {
-    grok_home_from(std::env::var("GROK_HOME").ok())
-}
-
-fn grok_home_from(override_home: Option<String>) -> PathBuf {
-    match override_home {
-        Some(home) if !home.is_empty() => PathBuf::from(home),
-        _ => dirs_home().join(".grok"),
-    }
-}
-
-fn dirs_home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"))
-}
-
-/// Read the current Grok Build OIDC token. Do not log or persist it.
-#[allow(dead_code)]
-pub fn load_bearer() -> Result<Bearer, AuthError> {
-    let mut bearers = load_bearers()?;
-    bearers.drain(..).next().ok_or(AuthError::Missing)
-}
-
-/// Every unexpired Grok Build token, xAI entries first.
-pub fn load_bearers() -> Result<Vec<Bearer>, AuthError> {
-    let path = grok_home().join("auth.json");
+/// Read the one session stored in this CLI home. Do not log or persist it.
+///
+/// A home with several entries still yields one session. The process
+/// `GROK_HOME` is not consulted; pass the icon's home.
+pub fn load_bearer_from(home: &Path) -> Result<Bearer, AuthError> {
+    let path = home.join("auth.json");
     let mut raw = fs::read_to_string(&path).map_err(|_| AuthError::Missing)?;
-    let result = bearers_from_auth_json(&raw);
+    let result = primary_bearer_from_auth_json(&raw);
     raw.zeroize();
     result
 }
 
-#[cfg(test)]
-fn bearer_from_auth_json(raw: &str) -> Result<Bearer, AuthError> {
+fn primary_bearer_from_auth_json(raw: &str) -> Result<Bearer, AuthError> {
     let mut bearers = bearers_from_auth_json(raw)?;
     bearers.drain(..).next().ok_or(AuthError::Missing)
 }
@@ -166,26 +144,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn grok_home_respects_override() {
-        assert_eq!(
-            grok_home_from(Some("/tmp/grok-test-home".into())),
-            PathBuf::from("/tmp/grok-test-home")
-        );
-        assert_eq!(
-            grok_home_from(Some(String::new())),
-            dirs_home().join(".grok")
-        );
-        assert_eq!(grok_home_from(None), dirs_home().join(".grok"));
-    }
-
-    #[test]
     fn prefers_unexpired_xai_token() {
         let json = r#"{
             "https://auth.x.ai::stale": {"key":"stale-token","expires_at":"2000-01-01T00:00:00Z","email":"old@x.ai"},
             "https://auth.x.ai::fresh": {"key":"fresh-token","expires_at":"2099-01-01T00:00:00Z","email":"new@x.ai"},
             "https://other.example::": {"key":"other-token","expires_at":"2099-01-01T00:00:00Z"}
         }"#;
-        let bearer = bearer_from_auth_json(json).unwrap();
+        let bearer = primary_bearer_from_auth_json(json).unwrap();
         assert_eq!(bearer.token, "fresh-token");
         assert_eq!(bearer.identity.email.as_deref(), Some("new@x.ai"));
     }
@@ -196,7 +161,7 @@ mod tests {
             "https://auth.x.ai::empty": {"key":"","expires_at":"2099-01-01T00:00:00Z"},
             "https://cli.example::": {"key":"fallback-token","expires_at":"2099-01-01T00:00:00Z","email":"cli@x.ai"}
         }"#;
-        let bearer = bearer_from_auth_json(json).unwrap();
+        let bearer = primary_bearer_from_auth_json(json).unwrap();
         assert_eq!(bearer.token, "fallback-token");
     }
 
@@ -206,7 +171,7 @@ mod tests {
             "https://auth.x.ai::stale": {"key":"stale-token","expires_at":"2000-01-01T00:00:00Z"},
             "https://cli.example::": {"key":"fallback-token","expires_at":"2099-01-01T00:00:00Z"}
         }"#;
-        let bearer = bearer_from_auth_json(json).unwrap();
+        let bearer = primary_bearer_from_auth_json(json).unwrap();
         assert_eq!(bearer.token, "fallback-token");
     }
 
@@ -216,26 +181,75 @@ mod tests {
             "https://auth.x.ai::stale": {"key":"stale-token","expires_at":"2000-01-01T00:00:00Z"}
         }"#;
         assert!(matches!(
-            bearer_from_auth_json(json),
+            primary_bearer_from_auth_json(json),
             Err(AuthError::Expired)
         ));
     }
 
     #[test]
-    fn load_bearers_returns_all_fresh_xai() {
+    fn one_cli_home_yields_one_session_even_with_multiple_entries() {
         let json = r#"{
             "https://auth.x.ai::b": {"key":"token-b","expires_at":"2099-01-01T00:00:00Z","email":"b@x.ai"},
             "https://auth.x.ai::a": {"key":"token-a","expires_at":"2099-01-01T00:00:00Z","email":"a@x.ai"},
             "https://auth.x.ai::stale": {"key":"stale-token","expires_at":"2000-01-01T00:00:00Z","email":"old@x.ai"},
             "https://cli.example::": {"key":"fallback-token","expires_at":"2099-01-01T00:00:00Z","email":"cli@x.ai"}
         }"#;
-        let bearers = bearers_from_auth_json(json).unwrap();
-        let emails: Vec<_> = bearers
-            .iter()
-            .map(|b| b.identity.email.as_deref().unwrap())
-            .collect();
-        assert_eq!(emails, ["a@x.ai", "b@x.ai"]);
-        assert_eq!(bearers[0].token, "token-a");
-        assert_eq!(bearers[1].token, "token-b");
+        let bearer = primary_bearer_from_auth_json(json).unwrap();
+        assert_eq!(bearer.identity.email.as_deref(), Some("a@x.ai"));
+        assert_eq!(bearer.token, "token-a");
+    }
+
+    #[test]
+    fn sessions_stay_inside_their_cli_home() {
+        let _guard = crate::login::PROCESS_ENV_LOCK.lock().unwrap();
+        let previous = std::env::var_os("GROK_HOME");
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("grok-mon-auth-{nanos}"));
+        let env_home = root.join("env");
+        let sim = root.join("sim");
+        let pers = root.join("pers");
+        write_auth(&env_home, "env@example.com", "token-env");
+        write_auth(&sim, "sim@example.com", "token-sim");
+        write_auth(&pers, "pers@example.com", "token-pers");
+        // SAFETY: tests serialize environment changes with PROCESS_ENV_LOCK.
+        unsafe { std::env::set_var("GROK_HOME", &env_home) };
+
+        let sim_bearer = load_bearer_from(&sim).unwrap();
+        let pers_bearer = load_bearer_from(&pers).unwrap();
+        assert_eq!(
+            sim_bearer.identity.email.as_deref(),
+            Some("sim@example.com")
+        );
+        assert_eq!(
+            pers_bearer.identity.email.as_deref(),
+            Some("pers@example.com")
+        );
+        assert_ne!(
+            sim_bearer.identity.email.as_deref(),
+            pers_bearer.identity.email.as_deref()
+        );
+        assert_ne!(
+            sim_bearer.identity.email.as_deref(),
+            Some("env@example.com")
+        );
+        assert!(load_bearer_from(&root.join("missing")).is_err());
+
+        let _ = fs::remove_dir_all(&root);
+        match previous {
+            // SAFETY: tests serialize environment changes with PROCESS_ENV_LOCK.
+            Some(value) => unsafe { std::env::set_var("GROK_HOME", value) },
+            None => unsafe { std::env::remove_var("GROK_HOME") },
+        }
+    }
+
+    fn write_auth(home: &Path, email: &str, token: &str) {
+        fs::create_dir_all(home).unwrap();
+        let json = format!(
+            r#"{{"https://auth.x.ai::id":{{"key":"{token}","expires_at":"2099-01-01T00:00:00Z","email":"{email}"}}}}"#
+        );
+        fs::write(home.join("auth.json"), json).unwrap();
     }
 }

@@ -89,6 +89,7 @@ pub fn is_grok_bot_dir_name(name: &OsStr) -> bool {
         .is_some_and(|s| s == DEFAULT_GROK_BOT_DIR_NAME || s.starts_with("Grok Bot"))
 }
 
+#[allow(dead_code)] // Account monitor no longer scans Grok Bot profiles.
 pub fn root_used_at(dir: &Path) -> SystemTime {
     [
         dir.join(SECRETS_FILE),

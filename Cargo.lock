@@ -1035,7 +1035,7 @@ dependencies = [
 
 [[package]]
 name = "cosmic-ext-applet-grok-monitor"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "aes",
  "cbc",
@@ -1046,6 +1046,7 @@ dependencies = [
  "libcosmic",
  "pbkdf2",
  "reqwest",
+ "ron",
  "secret-service",
  "serde",
  "serde_json",

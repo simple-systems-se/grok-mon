@@ -32,6 +32,15 @@
     <content_attribute id="social-info">mild</content_attribute>
   </content_rating>
   <releases>
+    <release version="0.4.2" date="2026-11-16">
+      <description>
+        <p>
+          After sign-in, a failed usage request shows an error instead of
+          staying on an ellipsis. The retired Grok Bot slot does not read
+          profile directories. Setup documentation includes illustrations.
+        </p>
+      </description>
+    </release>
     <release version="0.4.1" date="2026-11-16">
       <description>
         <p>

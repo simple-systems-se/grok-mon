@@ -8,19 +8,6 @@ use std::collections::VecDeque;
 
 pub const IDENTITY_MAX_CHARS: usize = 28;
 
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn display_identity(email: Option<&str>, name: Option<&str>) -> Option<String> {
-    email
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            name.map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-        })
-}
-
 pub fn truncate_identity(raw: &str) -> String {
     truncate_identity_to(raw, IDENTITY_MAX_CHARS)
 }
@@ -192,21 +179,6 @@ pub fn panel_chip<'a, Message: Clone + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn display_identity_prefers_email() {
-        assert_eq!(
-            display_identity(Some("a@x.ai"), Some("Ada")).as_deref(),
-            Some("a@x.ai")
-        );
-        assert_eq!(display_identity(None, Some("Ada")).as_deref(), Some("Ada"));
-        assert_eq!(
-            display_identity(Some("  "), Some("Ada")).as_deref(),
-            Some("Ada")
-        );
-        assert_eq!(display_identity(None, None), None);
-        assert_eq!(display_identity(Some(""), Some("")), None);
-    }
 
     #[test]
     fn truncate_identity_keeps_short() {

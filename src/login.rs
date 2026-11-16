@@ -298,9 +298,7 @@ pub fn spawn_device_login(home: &Path, grok_path: &str) -> Result<LoginJob, Stri
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .map_err(|err| format!("failed to launch grok: {err}"))?;
+    let mut child = cmd.spawn().map_err(|err| launch_failure(&err))?;
     let stdout = child
         .stdout
         .take()
@@ -327,9 +325,7 @@ pub fn run_logout(home: &Path, grok_path: &str) -> Result<(), String> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = cmd
-        .output()
-        .map_err(|err| format!("failed to launch grok: {err}"))?;
+    let output = cmd.output().map_err(|err| launch_failure(&err))?;
     if output.status.success() {
         return Ok(());
     }
@@ -342,6 +338,14 @@ pub fn run_logout(home: &Path, grok_path: &str) -> Result<(), String> {
     } else {
         message
     })
+}
+
+fn launch_failure(err: &std::io::Error) -> String {
+    match err.kind() {
+        std::io::ErrorKind::NotFound => crate::grok_cli::NOT_FOUND_PREFIX.to_string(),
+        std::io::ErrorKind::PermissionDenied => "failed to launch grok: permission denied".into(),
+        _ => "failed to launch grok".into(),
+    }
 }
 
 pub async fn logout_async(home: PathBuf, grok_path: String) -> Result<(), String> {
@@ -608,6 +612,29 @@ fn looks_like_secret(token: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_failure_hides_the_os_error_number() {
+        let missing = std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "No such file or directory (os error 2)",
+        );
+        let message = launch_failure(&missing);
+        assert!(
+            message.starts_with(crate::grok_cli::NOT_FOUND_PREFIX),
+            "{message}"
+        );
+        assert!(!message.contains("os error"), "{message}");
+        assert!(
+            !message.to_ascii_lowercase().contains("no such file"),
+            "{message}"
+        );
+
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "os error 13");
+        let message = launch_failure(&denied);
+        assert_eq!(message, "failed to launch grok: permission denied");
+        assert!(!message.contains("os error"));
+    }
 
     #[test]
     fn device_login_is_scoped_and_is_not_browser_oauth() {

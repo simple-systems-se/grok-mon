@@ -11,7 +11,8 @@ can be finished in an Incognito window. They are not written to logs. The
 applet does not log session-file contents or tokens.
 
 Grok Monitor does not read Grok Bot profiles to decide which icons to show.
-The retired Grok Bot Monitor slot does not poll. Grok API Monitor reads a
+The retired Grok Bot Monitor slot does not poll, and opening it does not read
+Grok Bot profile directories, session files, or the keyring. Grok API Monitor reads a
 Management API key from `~/.config/grok-mon-api/credentials.json` and/or
 `XAI_MANAGEMENT_API_KEY` and calls xAI’s Management API billing endpoints.
 That prepaid path is separate from the weekly usage chips.

@@ -338,7 +338,6 @@ async fn fetch_bearer(
             snapshot.email = identity_email;
         }
         tracing::info!(
-            account = %label,
             percent = snapshot.percent,
             unified = snapshot.unified,
             "fetched shared Grok usage"

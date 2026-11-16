@@ -32,6 +32,16 @@
     <content_attribute id="social-info">mild</content_attribute>
   </content_rating>
   <releases>
+    <release version="0.4.1" date="2026-11-16">
+      <description>
+        <p>
+          Find the grok CLI when the panel PATH does not include it. Sign in
+          and sign out search PATH, ~/.grok/bin, the newest nvm Node install,
+          ~/.bun/bin, and ~/.local/bin. Set the grok_path config key to choose
+          a binary. A missing CLI is explained in the popup.
+        </p>
+      </description>
+    </release>
     <release version="0.4.0" date="2026-11-12">
       <description>
         <p>

@@ -1,9 +1,10 @@
 //! Device-code sign-in and sign-out for one icon's CLI home.
 //!
 //! The child process is the only place `GROK_HOME` is set. The panel process
-//! is left alone. Sign-in always passes `--device-code` (the documented alias
-//! of `--device-auth`). A plain `grok login` or `--oauth` would open the
-//! system browser. Sign-out is `grok logout` with that same home.
+//! is left alone, including its `PATH`. Sign-in always passes `--device-code`
+//! (the documented alias of `--device-auth`). A plain `grok login` or
+//! `--oauth` would open the system browser. Sign-out is `grok logout` with
+//! that same home. Both commands start the executable from [`crate::grok_cli`].
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -156,7 +157,7 @@ impl LoginUiState {
             LoginUpdate::Failed(message) => {
                 self.phase = LoginPhase::Failed;
                 self.prompt = DevicePrompt::default();
-                self.message = failure_message(&message);
+                self.message = present_failure(message);
             }
             LoginUpdate::Canceled => {
                 self.phase = LoginPhase::Idle;
@@ -232,6 +233,37 @@ pub fn failure_message(raw: &str) -> String {
     }
 }
 
+/// Resolver errors name the places that were checked. CLI sanitizing would
+/// drop that list, so those messages are shown as written.
+fn present_failure(message: String) -> String {
+    if message.starts_with("The grok CLI was not found.") {
+        message
+    } else {
+        failure_message(&message)
+    }
+}
+
+fn launch_error(program: &Path, err: std::io::Error) -> String {
+    if err.kind() == std::io::ErrorKind::NotFound {
+        format!(
+            "The grok CLI was not found. Places checked:\n- {}",
+            program.display()
+        )
+    } else {
+        format!("failed to launch grok ({}): {err}", program.display())
+    }
+}
+
+fn resolved_command(
+    invocation: &CliInvocation,
+    configured: &str,
+) -> Result<(PathBuf, Command), String> {
+    let program = crate::grok_cli::resolve_grok_from_env(configured)?;
+    let mut cmd = Command::new(&program);
+    invocation.apply(&mut cmd);
+    Ok((program, cmd))
+}
+
 pub struct LoginJob {
     child: Child,
     rx: Receiver<LoginJobEvent>,
@@ -288,16 +320,13 @@ impl Drop for LoginJob {
     }
 }
 
-pub fn spawn_device_login(home: &Path) -> Result<LoginJob, String> {
+pub fn spawn_device_login(home: &Path, configured: &str) -> Result<LoginJob, String> {
     let invocation = device_login_invocation(home);
-    let mut cmd = Command::new(&invocation.program);
-    invocation.apply(&mut cmd);
+    let (program, mut cmd) = resolved_command(&invocation, configured)?;
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .map_err(|err| format!("failed to launch grok: {err}"))?;
+    let mut child = cmd.spawn().map_err(|err| launch_error(&program, err))?;
     let stdout = child
         .stdout
         .take()
@@ -316,16 +345,13 @@ pub fn spawn_device_login(home: &Path) -> Result<LoginJob, String> {
     })
 }
 
-pub fn run_logout(home: &Path) -> Result<(), String> {
+pub fn run_logout(home: &Path, configured: &str) -> Result<(), String> {
     let invocation = logout_invocation(home);
-    let mut cmd = Command::new(&invocation.program);
-    invocation.apply(&mut cmd);
+    let (program, mut cmd) = resolved_command(&invocation, configured)?;
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let output = cmd
-        .output()
-        .map_err(|err| format!("failed to launch grok: {err}"))?;
+    let output = cmd.output().map_err(|err| launch_error(&program, err))?;
     if output.status.success() {
         return Ok(());
     }
@@ -340,8 +366,8 @@ pub fn run_logout(home: &Path) -> Result<(), String> {
     })
 }
 
-pub async fn logout_async(home: PathBuf) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || run_logout(&home))
+pub async fn logout_async(home: PathBuf, configured: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || run_logout(&home, &configured))
         .await
         .unwrap_or_else(|_| Err("Sign-out failed.".into()))
 }
@@ -789,6 +815,120 @@ mod tests {
         });
         assert_eq!(state.phase, LoginPhase::Failed);
         assert!(state.message.contains("without a session"));
+    }
+
+    #[test]
+    fn missing_cli_message_stays_intact_in_the_popup() {
+        let mut state = LoginUiState::default();
+        let message = "The grok CLI was not found. Places checked:\n- /a/grok\n- /b/grok\n- /c/grok\n- /d/grok\n- /e/grok\n- /home/user/.grok/bin/grok";
+        state.apply(LoginUpdate::Failed(message.into()));
+        assert_eq!(state.phase, LoginPhase::Failed);
+        assert_eq!(state.message, message);
+        assert!(!state.message.contains("os error"));
+    }
+
+    #[test]
+    fn sign_in_and_sign_out_run_the_resolved_cli_and_leave_the_panel_env() {
+        let _guard = PROCESS_ENV_LOCK.lock().unwrap();
+        let previous_path = std::env::var_os("PATH");
+        let previous_home = std::env::var_os("HOME");
+        let previous_grok_home = std::env::var_os("GROK_HOME");
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("grok-mon-spawn-{nanos}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let marker = root.join("seen");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" \"$2\" \"$GROK_HOME\" >> '{}'\n",
+            marker.display()
+        );
+        let program = bin.join("grok");
+        std::fs::write(&program, script).unwrap();
+        let mut perms = std::fs::metadata(&program).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+        std::fs::set_permissions(&program, perms).unwrap();
+
+        // SAFETY: tests serialize environment changes with PROCESS_ENV_LOCK.
+        unsafe { std::env::set_var("PATH", &bin) };
+        unsafe { std::env::set_var("HOME", &home) };
+        unsafe { std::env::set_var("GROK_HOME", "/panel/grok-home") };
+
+        let icon_home = Path::new("/icons/pers/.grok-personal");
+        let mut job = spawn_device_login(icon_home, "").expect("resolved grok should start");
+        let finished = wait_for_login(&mut job);
+        assert!(
+            finished.success,
+            "sign-in script failed: {}",
+            finished.message
+        );
+        drop(job);
+
+        run_logout(Path::new("/icons/sim/.grok"), "").expect("resolved grok logout should start");
+        let seen = std::fs::read_to_string(&marker).unwrap();
+        let lines: Vec<_> = seen.lines().collect();
+        assert_eq!(
+            lines,
+            [
+                "login",
+                "--device-code",
+                "/icons/pers/.grok-personal",
+                "logout",
+                "",
+                "/icons/sim/.grok",
+            ]
+        );
+        assert_eq!(std::env::var("PATH").unwrap(), bin.to_string_lossy());
+        assert_eq!(std::env::var("HOME").unwrap(), home.to_string_lossy());
+        assert_eq!(std::env::var("GROK_HOME").unwrap(), "/panel/grok-home");
+
+        let empty_path = root.join("empty-path");
+        let empty_home = root.join("empty-home");
+        std::fs::create_dir_all(&empty_path).unwrap();
+        std::fs::create_dir_all(&empty_home).unwrap();
+        unsafe { std::env::set_var("PATH", &empty_path) };
+        unsafe { std::env::set_var("HOME", &empty_home) };
+        let missing = match spawn_device_login(icon_home, "") {
+            Ok(_) => panic!("missing grok should not start"),
+            Err(err) => err,
+        };
+        assert!(missing.starts_with("The grok CLI was not found."));
+        assert!(missing.contains(&format!("{}/grok", empty_path.display())));
+        assert!(missing.contains(&format!("{}/.grok/bin/grok", empty_home.display())));
+        assert!(missing.contains(&format!(
+            "{}/.nvm/versions/node/*/bin/grok",
+            empty_home.display()
+        )));
+        assert!(missing.contains(&format!("{}/.bun/bin/grok", empty_home.display())));
+        assert!(missing.contains(&format!("{}/.local/bin/grok", empty_home.display())));
+        assert!(!missing.contains("os error 2"));
+        assert!(!missing.contains("No such file or directory"));
+        let mut state = LoginUiState::default();
+        state.apply(LoginUpdate::Failed(missing.clone()));
+        assert_eq!(state.message, missing);
+        assert_eq!(std::env::var("GROK_HOME").unwrap(), "/panel/grok-home");
+        assert_eq!(std::env::var("PATH").unwrap(), empty_path.to_string_lossy());
+
+        restore("PATH", previous_path);
+        restore("HOME", previous_home);
+        restore("GROK_HOME", previous_grok_home);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn wait_for_login(job: &mut LoginJob) -> LoginFinish {
+        for _ in 0..100 {
+            if let Some(finished) = job.poll().finished {
+                return finished;
+            }
+            thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("grok child did not finish");
     }
 
     fn restore(key: &str, previous: Option<std::ffi::OsString>) {

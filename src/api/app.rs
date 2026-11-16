@@ -277,12 +277,13 @@ impl cosmic::Application for GrokApiMonitor {
         let (label, color) = self.chip_label();
         let theme = theme::active();
         let track: Color = theme.cosmic().on_bg_color().into();
+        let center: Color = theme.cosmic().bg_color().into();
         let percent = self
             .snapshot
             .as_ref()
             .map(ApiSnapshot::remaining_percent)
             .unwrap_or(0.0);
-        let svg = usage_ring(percent, color, track, RingIcon::Key);
+        let svg = usage_ring(percent, color, track, center, RingIcon::Key);
         let sparkline = (self.config.show_sparkline && !self.history.is_empty())
             .then(|| chip::sparkline(&self.history));
         let identity = self.config.chip_identity(
@@ -312,7 +313,9 @@ impl cosmic::Application for GrokApiMonitor {
 
         self.core
             .applet
-            .popup_container(container(content).width(Length::Fixed(360.0)))
+            .popup_container(chip::solid_popup(
+                container(content).width(Length::Fixed(360.0)),
+            ))
             .into()
     }
 }

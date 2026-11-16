@@ -11,15 +11,13 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-pub const GROK_PROGRAM: &str = "grok";
-
 /// Held by tests that mutate process environment variables.
 #[cfg(test)]
 pub static PROCESS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CliInvocation {
-    pub program: String,
+    pub program: PathBuf,
     pub args: Vec<String>,
     pub grok_home: PathBuf,
 }
@@ -31,17 +29,17 @@ impl CliInvocation {
     }
 }
 
-pub fn device_login_invocation(home: &Path) -> CliInvocation {
+pub fn device_login_invocation(home: &Path, program: &Path) -> CliInvocation {
     CliInvocation {
-        program: GROK_PROGRAM.into(),
+        program: program.to_path_buf(),
         args: vec!["login".into(), "--device-code".into()],
         grok_home: home.to_path_buf(),
     }
 }
 
-pub fn logout_invocation(home: &Path) -> CliInvocation {
+pub fn logout_invocation(home: &Path, program: &Path) -> CliInvocation {
     CliInvocation {
-        program: GROK_PROGRAM.into(),
+        program: program.to_path_buf(),
         args: vec!["logout".into()],
         grok_home: home.to_path_buf(),
     }
@@ -224,6 +222,10 @@ pub fn sanitize_cli_message(text: &str) -> String {
 }
 
 pub fn failure_message(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.starts_with(crate::grok_cli::NOT_FOUND_PREFIX) {
+        return trimmed.to_string();
+    }
     let clean = sanitize_cli_message(raw);
     if clean.is_empty() {
         "Sign-in failed.".into()
@@ -288,8 +290,9 @@ impl Drop for LoginJob {
     }
 }
 
-pub fn spawn_device_login(home: &Path) -> Result<LoginJob, String> {
-    let invocation = device_login_invocation(home);
+pub fn spawn_device_login(home: &Path, grok_path: &str) -> Result<LoginJob, String> {
+    let program = crate::grok_cli::resolve_from_env(grok_path)?;
+    let invocation = device_login_invocation(home, &program);
     let mut cmd = Command::new(&invocation.program);
     invocation.apply(&mut cmd);
     cmd.stdin(Stdio::null())
@@ -316,8 +319,9 @@ pub fn spawn_device_login(home: &Path) -> Result<LoginJob, String> {
     })
 }
 
-pub fn run_logout(home: &Path) -> Result<(), String> {
-    let invocation = logout_invocation(home);
+pub fn run_logout(home: &Path, grok_path: &str) -> Result<(), String> {
+    let program = crate::grok_cli::resolve_from_env(grok_path)?;
+    let invocation = logout_invocation(home, &program);
     let mut cmd = Command::new(&invocation.program);
     invocation.apply(&mut cmd);
     cmd.stdin(Stdio::null())
@@ -340,8 +344,8 @@ pub fn run_logout(home: &Path) -> Result<(), String> {
     })
 }
 
-pub async fn logout_async(home: PathBuf) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || run_logout(&home))
+pub async fn logout_async(home: PathBuf, grok_path: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || run_logout(&home, &grok_path))
         .await
         .unwrap_or_else(|_| Err("Sign-out failed.".into()))
 }
@@ -591,7 +595,7 @@ fn redact_secrets(text: &str) -> String {
 }
 
 fn looks_like_secret(token: &str) -> bool {
-    if token.starts_with("https://") || token.starts_with("http://") {
+    if token.starts_with("https://") || token.starts_with("http://") || token.contains('/') {
         return false;
     }
     token
@@ -608,8 +612,8 @@ mod tests {
     #[test]
     fn device_login_is_scoped_and_is_not_browser_oauth() {
         let home = Path::new("/icons/pers/.grok-personal");
-        let invocation = device_login_invocation(home);
-        assert_eq!(invocation.program, "grok");
+        let invocation = device_login_invocation(home, Path::new("grok"));
+        assert_eq!(invocation.program, Path::new("grok"));
         assert_eq!(invocation.args, ["login", "--device-code"]);
         assert_eq!(invocation.grok_home, home);
         assert!(invocation.args.iter().all(|arg| arg != "--oauth"));
@@ -619,8 +623,8 @@ mod tests {
 
     #[test]
     fn logout_is_scoped_to_the_given_home_only() {
-        let sim = logout_invocation(Path::new("/icons/sim/.grok"));
-        let pers = logout_invocation(Path::new("/icons/pers/.grok-personal"));
+        let sim = logout_invocation(Path::new("/icons/sim/.grok"), Path::new("grok"));
+        let pers = logout_invocation(Path::new("/icons/pers/.grok-personal"), Path::new("grok"));
         assert_eq!(sim.args, ["logout"]);
         assert_eq!(pers.args, ["logout"]);
         assert_ne!(sim.grok_home, pers.grok_home);
@@ -639,7 +643,7 @@ mod tests {
         unsafe { std::env::set_var("GROK_CREDENTIALS_FILE", "/parent/credentials.json") };
 
         let home = "/icons/pers/.grok-personal";
-        let invocation = device_login_invocation(Path::new(home));
+        let invocation = device_login_invocation(Path::new(home), Path::new("grok"));
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
             .arg("printf '%s\\n' \"$0\" \"$1\" \"$#\" \"$GROK_HOME\"");
@@ -650,7 +654,7 @@ mod tests {
         let lines: Vec<_> = text.lines().collect();
         assert_eq!(lines, ["login", "--device-code", "1", home]);
 
-        let logout = logout_invocation(Path::new("/icons/sim/.grok"));
+        let logout = logout_invocation(Path::new("/icons/sim/.grok"), Path::new("grok"));
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
             .arg("printf '%s\\n' \"$0\" \"$#\" \"$GROK_HOME\"; printenv GROK_CREDENTIALS_FILE");
@@ -777,6 +781,23 @@ mod tests {
         assert_eq!(state.phase, LoginPhase::Idle);
         assert_eq!(state.message, "Sign-in canceled.");
         assert!(state.prompt.user_code.is_none());
+    }
+
+    #[test]
+    fn missing_cli_lists_places_without_the_os_error() {
+        let mut state = LoginUiState::default();
+        let message = "The grok CLI was not found. Places checked:\n- /tmp/path/grok\n- /tmp/home/.grok/bin/grok\n- /tmp/home/.nvm/versions/node/v20.20.2/bin/grok";
+        state.apply(LoginUpdate::Failed(message.into()));
+        assert_eq!(state.phase, LoginPhase::Failed);
+        assert!(state.message.contains("The grok CLI was not found"));
+        assert!(state.message.contains("/tmp/home/.grok/bin/grok"));
+        assert!(
+            state
+                .message
+                .contains("/tmp/home/.nvm/versions/node/v20.20.2/bin/grok")
+        );
+        assert!(!state.message.contains("os error"));
+        assert!(!state.message.contains("[redacted]"));
     }
 
     #[test]

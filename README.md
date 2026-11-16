@@ -31,7 +31,9 @@ Shared:
 
 Grok Monitor:
 
-- A [Grok CLI](https://grok.com) on `PATH` (`grok`)
+- A [Grok CLI](https://grok.com) (`grok`). The applet looks it up on `PATH`,
+  then in `~/.grok/bin`, the newest nvm Node install, `~/.bun/bin`, and
+  `~/.local/bin`. Set `grok_path` (below) to use one exact binary.
 - Sign in from each panel icon. The icon runs `grok login --device-code` with
   `GROK_HOME` set to that icon's CLI home only. Finish the code in an
   Incognito window so the browser profile that is already signed in does not
@@ -252,8 +254,40 @@ expanded for the current user. Order in the file is the panel order.
 | A list | Exactly those icons, in order |
 | File present but not valid RON | No icons, and a config error on the panel |
 
-Other applet settings (poll interval, sparkline, pace) are sibling keys in the
-same `v1` directory. Editing `accounts` does not require a settings UI.
+Other applet settings (poll interval, sparkline, pace, `grok_path`) are sibling
+keys in the same `v1` directory. Editing `accounts` does not require a settings
+UI.
+
+### `grok_path`
+
+Sign in and sign out both run the `grok` binary. The panel's `PATH` is often
+too short to include the official installer (`~/.grok/bin/grok`) or a copy
+installed with nvm. The applet resolves one executable, in this order, and
+uses that path for every `grok` launch (`login --device-code` and `logout`):
+
+1. The `grok_path` key, when it is a non-empty path to a regular executable
+   file. Symlinks are followed. A leading `~/` is expanded for the current
+   user. Empty or missing means keep searching.
+2. The first regular executable named `grok` on `PATH`.
+3. `~/.grok/bin/grok`
+4. The newest `~/.nvm/versions/node/*/bin/grok`, chosen by Node's semantic
+   version, not by file modification time.
+5. `~/.bun/bin/grok`
+6. `~/.local/bin/grok`
+
+```
+~/.config/cosmic/io.github.simple-systems-se.grok-mon/v1/grok_path
+```
+
+The file is a RON string:
+
+```ron
+"/home/you/.grok/bin/grok"
+```
+
+The applet does not change its own `PATH` or `GROK_HOME`. `GROK_HOME` is set
+only on the `grok` child, to that icon's CLI home. If nothing usable is found,
+the popup says the grok CLI was not found and lists the places it checked.
 
 The percent on a chip is that CLI home's `creditUsagePercent` from
 `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`. On a unified
@@ -394,10 +428,12 @@ billing and settings endpoints.
 
 **Sign in** runs `grok login --device-code` (`--device-code` is the alias of
 `--device-auth` in the current Grok CLI). **Sign out** runs `grok logout`.
-Both set `GROK_HOME` on that child process to the expanded CLI home for the
-icon and clear `GROK_CREDENTIALS_FILE` on the child so another home cannot
-redirect the session. A plain `grok login` or `grok login --oauth` is not
-used, because that flow opens the system browser.
+Both use the `grok` binary from `grok_path` or the search above. They set
+`GROK_HOME` on that child process to the expanded CLI home for the icon and
+clear `GROK_CREDENTIALS_FILE` on the child so another home cannot redirect the
+session. The panel process keeps its own `PATH` and `GROK_HOME`. A plain
+`grok login` or `grok login --oauth` is not used, because that flow opens the
+system browser.
 
 Grok API Monitor reads a Management API key from
 `~/.config/grok-mon-api/credentials.json` and/or `XAI_MANAGEMENT_API_KEY`

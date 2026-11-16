@@ -58,8 +58,8 @@ pub fn ring_icon<'a, Message: 'a>(applet: &Context, svg: String) -> Element<'a, 
 
 pub fn usage_bar<'a, Message: 'a>(fill_percent: f32, used_percent: f32) -> Element<'a, Message> {
     let fill = usage_color(used_percent);
-    let mut track: Color = theme::active().cosmic().on_bg_color().into();
-    track.a *= 0.22;
+    let mut track: Color = theme::active().cosmic().bg_component_color().into();
+    track.a = 1.0;
     let filled = (fill_percent.clamp(0.0, 100.0) * 10.0).round() as u16;
     let rest = 1000u16.saturating_sub(filled);
     let mut bar = row::with_capacity(2);
@@ -125,6 +125,30 @@ pub struct PanelChip<'a, Message> {
     pub identity: Option<String>,
     pub sparkline: Option<Element<'a, Message>>,
     pub on_press: Message,
+}
+
+/// Popup body on the theme's opaque background, so a frosted applet popup
+/// does not show through the content.
+pub fn solid_popup<'a, Message: 'a>(
+    content: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    container(content)
+        .width(Length::Fill)
+        .class(theme::Container::custom(|ui| {
+            let cosmic = ui.cosmic();
+            let mut background: Color = cosmic.bg_color().into();
+            background.a = 1.0;
+            cosmic::iced::widget::container::Style {
+                background: Some(Background::Color(background)),
+                border: Border {
+                    radius: cosmic.corner_radii.radius_m.into(),
+                    width: 0.0,
+                    color: Color::TRANSPARENT,
+                },
+                ..Default::default()
+            }
+        }))
+        .into()
 }
 
 pub fn panel_chip<'a, Message: Clone + 'static>(

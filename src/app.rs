@@ -351,7 +351,9 @@ impl cosmic::Application for GrokMonitor {
 
         self.core
             .applet
-            .popup_container(container(content).width(Length::Fixed(360.0)))
+            .popup_container(chip::solid_popup(
+                container(content).width(Length::Fixed(360.0)),
+            ))
             .into()
     }
 }
@@ -563,7 +565,8 @@ impl GrokMonitor {
             return Task::none();
         }
         let home = chip.cli_home.clone();
-        match login::spawn_device_login(&home) {
+        let grok_path = self.config.grok_path.clone();
+        match login::spawn_device_login(&home, &grok_path) {
             Ok(job) => {
                 self.jobs.insert(id.clone(), job);
                 if let Some(chip) = self.chip_mut(&id) {
@@ -601,11 +604,12 @@ impl GrokMonitor {
             return Task::none();
         }
         let home = chip.cli_home.clone();
+        let grok_path = self.config.grok_path.clone();
         self.jobs.remove(&id);
         if let Some(chip) = self.chip_mut(&id) {
             chip.login.apply(LoginUpdate::SigningOut);
         }
-        Task::perform(login::logout_async(home), move |result| {
+        Task::perform(login::logout_async(home, grok_path), move |result| {
             cosmic::action::Action::App(Message::LogoutFinished(id, result))
         })
     }
@@ -673,12 +677,13 @@ impl GrokMonitor {
         let (label, color) = chip_label(account, &self.config);
         let theme = theme::active();
         let track: Color = theme.cosmic().on_bg_color().into();
+        let center: Color = theme.cosmic().bg_color().into();
         let percent = account
             .snapshot
             .as_ref()
             .map(|snapshot| self.config.display_percent(snapshot.percent))
             .unwrap_or(0.0);
-        let svg = usage_ring(percent, color, track, RingIcon::Hammer);
+        let svg = usage_ring(percent, color, track, center, RingIcon::Hammer);
         let sparkline = (self.config.show_sparkline && !account.history.is_empty())
             .then(|| chip::sparkline(&account.history));
         panel_chip(
@@ -698,8 +703,9 @@ impl GrokMonitor {
     fn problem_chip(&self) -> Element<'_, Message> {
         let theme = theme::active();
         let track: Color = theme.cosmic().on_bg_color().into();
+        let center: Color = theme.cosmic().bg_color().into();
         let color: Color = theme.cosmic().warning_color().into();
-        let svg = usage_ring(0.0, color, track, RingIcon::Hammer);
+        let svg = usage_ring(0.0, color, track, center, RingIcon::Hammer);
         panel_chip(
             &self.core.applet,
             svg,

@@ -277,7 +277,9 @@ impl cosmic::Application for GrokBotMonitor {
 
         self.core
             .applet
-            .popup_container(container(content).width(Length::Fixed(360.0)))
+            .popup_container(chip::solid_popup(
+                container(content).width(Length::Fixed(360.0)),
+            ))
             .into()
     }
 }
@@ -350,6 +352,7 @@ impl GrokBotMonitor {
         let (label, color) = chip_label(account, &self.config);
         let theme = theme::active();
         let track: Color = theme.cosmic().on_bg_color().into();
+        let center: Color = theme.cosmic().bg_color().into();
         let percent = account.snapshot.as_ref().map_or(0.0, |s| {
             if s.enterprise {
                 0.0
@@ -357,7 +360,7 @@ impl GrokBotMonitor {
                 self.config.display_percent(s.percent)
             }
         });
-        let svg = usage_ring(percent, color, track, RingIcon::Bot);
+        let svg = usage_ring(percent, color, track, center, RingIcon::Bot);
         let sparkline = (self.config.show_sparkline && !account.history.is_empty())
             .then(|| chip::sparkline(&account.history));
         panel_chip(

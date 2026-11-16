@@ -44,38 +44,33 @@ pub fn usage_color(used: f32) -> Color {
     Color::from_rgb(DARK_RED[0], DARK_RED[1], DARK_RED[2])
 }
 
-pub fn usage_ring(percent: f32, fill: Color, track: Color, icon: RingIcon) -> String {
+pub fn usage_ring(
+    percent: f32,
+    fill: Color,
+    track: Color,
+    center: Color,
+    icon: RingIcon,
+) -> String {
     let pct = percent.clamp(0.0, 100.0).round() as u8;
     let fill_hex = color_hex(fill);
     let track_hex = color_hex(track);
-    let mut inner = fill;
-    inner.a *= 0.35;
-    let inner_hex = color_hex(inner);
-    let mut hole = track;
-    hole.a *= 0.12;
-    let hole_hex = color_hex(hole);
+    let mut center = center;
+    center.a = 1.0;
+    let center_hex = color_hex(center);
     let glyph = match icon {
         RingIcon::Hammer => HAMMER,
         RingIcon::Bot => BOT,
         RingIcon::Key => KEY,
     };
-    let clip_h = (f64::from(pct) / 100.0) * (2.0 * 12.9155);
-    let clip_y = (17.0 + 12.9155) - clip_h;
 
     format!(
         r##"<svg viewBox="0 0 34 34" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <clipPath id="bottom-half">
-      <rect x="4.0845" y="{clip_y:.4}" width="25.831" height="{clip_h:.4}"/>
-    </clipPath>
-  </defs>
   <path d="M17 1.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
     fill="none" stroke="{track_hex}" stroke-width="2"/>
   <path d="M17 1.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
     fill="none" stroke="{fill_hex}" stroke-width="2" stroke-linecap="round"
     stroke-dasharray="{pct}, 100"/>
-  <circle cx="17" cy="17" r="12.9155" fill="{hole_hex}"/>
-  <circle cx="17" cy="17" r="12.9155" fill="{inner_hex}" clip-path="url(#bottom-half)"/>
+  <circle cx="17" cy="17" r="12.9155" fill="{center_hex}"/>
   <g transform="translate(11,11) scale(0.75)" fill="none" stroke="{fill_hex}"
      stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
     {glyph}
@@ -104,6 +99,7 @@ mod tests {
             73.7,
             Color::from_rgb(1.0, 0.8, 0.0),
             Color::from_rgb(0.5, 0.5, 0.5),
+            Color::from_rgb(0.1, 0.1, 0.1),
             RingIcon::Hammer,
         );
         assert!(svg.contains("stroke-dasharray=\"74, 100\""));
@@ -113,14 +109,26 @@ mod tests {
 
     #[test]
     fn ring_clamps_and_picks_bot_glyph() {
-        let svg = usage_ring(140.0, Color::WHITE, Color::BLACK, RingIcon::Bot);
+        let svg = usage_ring(
+            140.0,
+            Color::WHITE,
+            Color::BLACK,
+            Color::from_rgb(0.1, 0.1, 0.1),
+            RingIcon::Bot,
+        );
         assert!(svg.contains("stroke-dasharray=\"100, 100\""));
         assert!(svg.contains("M8 5.5V3.3"));
     }
 
     #[test]
     fn ring_picks_key_glyph() {
-        let svg = usage_ring(40.0, Color::WHITE, Color::BLACK, RingIcon::Key);
+        let svg = usage_ring(
+            40.0,
+            Color::WHITE,
+            Color::BLACK,
+            Color::from_rgb(0.1, 0.1, 0.1),
+            RingIcon::Key,
+        );
         assert!(svg.contains("M8.5 8h5.2"));
         assert!(!svg.contains("M6.6 13.2"));
         assert!(!svg.contains("M8 5.5V3.3"));
@@ -148,5 +156,25 @@ mod tests {
         assert_eq!(usage_color(23.4).r, usage_color(23.0).r);
         assert_eq!(usage_color(23.4).g, usage_color(23.0).g);
         assert_eq!(usage_color(23.4).b, usage_color(23.0).b);
+    }
+
+    #[test]
+    fn ring_center_is_solid_and_has_no_translucent_wash() {
+        let fill = Color::from_rgb(0.90, 0.16, 0.14);
+        let track = Color::from_rgb(0.20, 0.21, 0.22);
+        let center = Color {
+            a: 0.12,
+            ..Color::from_rgb(0.11, 0.12, 0.13)
+        };
+        let svg = usage_ring(40.0, fill, track, center, RingIcon::Hammer);
+        let solid_center = Color { a: 1.0, ..center };
+        assert!(svg.contains(&format!("fill=\"{}\"", color_hex(solid_center))));
+        assert!(svg.contains(&color_hex(fill)));
+        assert!(svg.contains(&color_hex(track)));
+        assert!(!svg.contains("clip-path"));
+        assert!(!svg.contains("bottom-half"));
+        let dimmed = Color { a: 0.7, ..fill };
+        let dimmed_svg = usage_ring(10.0, dimmed, track, solid_center, RingIcon::Key);
+        assert!(dimmed_svg.contains(&color_hex(dimmed)));
     }
 }

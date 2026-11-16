@@ -32,6 +32,15 @@
     <content_attribute id="social-info">mild</content_attribute>
   </content_rating>
   <releases>
+    <release version="0.4.1" date="2026-11-16">
+      <description>
+        <p>
+          Find the grok CLI when it is not on the panel PATH, including
+          ~/.grok/bin and nvm. The progress ring and usage bar use solid
+          theme colors.
+        </p>
+      </description>
+    </release>
     <release version="0.4.0" date="2026-11-12">
       <description>
         <p>

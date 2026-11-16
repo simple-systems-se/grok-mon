@@ -8,6 +8,9 @@
 //!
 //! When the key is missing, the applet uses the two built-in icons. An empty
 //! list shows no icons. A file that does not parse shows no icons.
+//!
+//! `grok_path` is an optional path to the `grok` binary. Empty or missing
+//! means the applet searches `PATH` and the usual install locations.
 
 use cosmic::cosmic_config::{
     self, ConfigGet, CosmicConfigEntry, cosmic_config_derive::CosmicConfigEntry,
@@ -65,6 +68,9 @@ pub struct Config {
     /// Panel icons in display order. Missing key means [`default_accounts`].
     #[serde(default = "default_accounts")]
     pub accounts: Vec<AccountConfig>,
+    /// Path to the `grok` binary. Empty or missing means search automatically.
+    #[serde(default)]
+    pub grok_path: String,
 }
 
 impl Default for Config {
@@ -77,6 +83,7 @@ impl Default for Config {
             show_pace: true,
             account_labels: BTreeMap::new(),
             accounts: default_accounts(),
+            grok_path: String::new(),
         }
     }
 }
@@ -221,6 +228,24 @@ mod tests {
         let config: Config = ron::from_str(raw).unwrap();
         assert_eq!(config.poll_secs, 30);
         assert_eq!(config.accounts, default_accounts());
+        assert_eq!(config.grok_path, "");
+    }
+
+    #[test]
+    fn grok_path_round_trips_and_defaults_empty() {
+        assert_eq!(Config::default().grok_path, "");
+        let raw = r#"(
+            poll_secs: 60,
+            show_sparkline: false,
+            show_percent: true,
+            show_remaining: false,
+            show_pace: true,
+            account_labels: {},
+            accounts: [],
+            grok_path: "/opt/grok",
+        )"#;
+        let config: Config = ron::from_str(raw).unwrap();
+        assert_eq!(config.grok_path, "/opt/grok");
     }
 
     #[test]
@@ -295,6 +320,19 @@ mod tests {
         let broken = load_from(&ctx);
         assert!(broken.accounts_unreadable);
         assert!(broken.config.accounts.is_empty());
+
+        let grok_path_file = root
+            .join("cosmic")
+            .join(APP_ID)
+            .join("v1")
+            .join("grok_path");
+        fs::write(&grok_path_file, "\"/opt/grok\"\n").unwrap();
+        let with_path = load_from(&ctx);
+        assert_eq!(with_path.config.grok_path, "/opt/grok");
+
+        fs::write(&grok_path_file, "\"\"\n").unwrap();
+        let empty_path = load_from(&ctx);
+        assert_eq!(empty_path.config.grok_path, "");
 
         let _ = fs::remove_dir_all(&root);
     }

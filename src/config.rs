@@ -8,6 +8,10 @@
 //!
 //! When the key is missing, the applet uses the two built-in icons. An empty
 //! list shows no icons. A file that does not parse shows no icons.
+//!
+//! `grok_path` is an optional string under the same `v1` directory. Empty or
+//! missing means the applet searches for `grok` itself. A leading `~/` is
+//! expanded for the current user.
 
 use cosmic::cosmic_config::{
     self, ConfigGet, CosmicConfigEntry, cosmic_config_derive::CosmicConfigEntry,
@@ -65,6 +69,9 @@ pub struct Config {
     /// Panel icons in display order. Missing key means [`default_accounts`].
     #[serde(default = "default_accounts")]
     pub accounts: Vec<AccountConfig>,
+    /// Absolute or `~/` path of the `grok` executable. Empty or missing means search.
+    #[serde(default)]
+    pub grok_path: String,
 }
 
 impl Default for Config {
@@ -77,6 +84,7 @@ impl Default for Config {
             show_pace: true,
             account_labels: BTreeMap::new(),
             accounts: default_accounts(),
+            grok_path: String::new(),
         }
     }
 }
@@ -296,6 +304,49 @@ mod tests {
         assert!(broken.accounts_unreadable);
         assert!(broken.config.accounts.is_empty());
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn grok_path_missing_or_empty_means_auto_and_a_string_is_kept() {
+        assert!(Config::default().grok_path.is_empty());
+        let raw = r#"(
+            poll_secs: 60,
+            show_sparkline: false,
+            show_percent: true,
+            show_remaining: false,
+            show_pace: true,
+            account_labels: {},
+            accounts: [],
+        )"#;
+        let config: Config = ron::from_str(raw).unwrap();
+        assert!(config.grok_path.is_empty());
+        let raw = r#"(
+            poll_secs: 60,
+            show_sparkline: false,
+            show_percent: true,
+            show_remaining: false,
+            show_pace: true,
+            account_labels: {},
+            accounts: [],
+            grok_path: "~/.grok/bin/grok",
+        )"#;
+        let config: Config = ron::from_str(raw).unwrap();
+        assert_eq!(config.grok_path, "~/.grok/bin/grok");
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("grok-mon-grok-path-{nanos}"));
+        let _ = fs::remove_dir_all(&root);
+        let ctx =
+            cosmic_config::Config::with_custom_path(APP_ID, Config::VERSION, root.clone()).unwrap();
+        assert!(load_from(&ctx).config.grok_path.is_empty());
+        cosmic_config::ConfigSet::set(&ctx, "grok_path", "/opt/grok").unwrap();
+        assert_eq!(load_from(&ctx).config.grok_path, "/opt/grok");
+        cosmic_config::ConfigSet::set(&ctx, "grok_path", "").unwrap();
+        assert!(load_from(&ctx).config.grok_path.is_empty());
         let _ = fs::remove_dir_all(&root);
     }
 }

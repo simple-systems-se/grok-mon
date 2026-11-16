@@ -563,7 +563,8 @@ impl GrokMonitor {
             return Task::none();
         }
         let home = chip.cli_home.clone();
-        match login::spawn_device_login(&home) {
+        let grok_path = self.config.grok_path.clone();
+        match login::spawn_device_login(&home, &grok_path) {
             Ok(job) => {
                 self.jobs.insert(id.clone(), job);
                 if let Some(chip) = self.chip_mut(&id) {
@@ -601,11 +602,12 @@ impl GrokMonitor {
             return Task::none();
         }
         let home = chip.cli_home.clone();
+        let grok_path = self.config.grok_path.clone();
         self.jobs.remove(&id);
         if let Some(chip) = self.chip_mut(&id) {
             chip.login.apply(LoginUpdate::SigningOut);
         }
-        Task::perform(login::logout_async(home), move |result| {
+        Task::perform(login::logout_async(home, grok_path), move |result| {
             cosmic::action::Action::App(Message::LogoutFinished(id, result))
         })
     }

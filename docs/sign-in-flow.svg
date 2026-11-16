@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="460" viewBox="0 0 880 460" role="img" aria-labelledby="title desc">
+  <title id="title">Sign-in flow for one Grok Monitor icon</title>
+  <desc id="desc">Diagram of device-code sign-in. GROK_HOME is set only on the grok child.</desc>
+  <rect width="880" height="460" fill="#141416"/>
+  <text x="24" y="32" fill="#f4f4f5" font-family="sans-serif" font-size="18" font-weight="600">Sign in for one icon</text>
+  <text x="24" y="54" fill="#a1a1aa" font-family="sans-serif" font-size="13">Illustration. The panel process does not take GROK_HOME from its own environment.</text>
+
+  <g font-family="sans-serif" font-size="13" fill="#f4f4f5">
+    <rect x="24" y="80" width="190" height="72" rx="10" fill="#2b2b30"/>
+    <text x="40" y="108">1. Click the chip</text>
+    <text x="40" y="128" fill="#a1a1aa">Choose Sign in</text>
+
+    <rect x="238" y="80" width="210" height="72" rx="10" fill="#2b2b30"/>
+    <text x="254" y="108">2. Child process</text>
+    <text x="254" y="128" fill="#a1a1aa">grok login --device-code</text>
+
+    <rect x="472" y="80" width="180" height="72" rx="10" fill="#2b2b30"/>
+    <text x="488" y="108">3. Popup</text>
+    <text x="488" y="128" fill="#a1a1aa">URL and user code</text>
+
+    <rect x="676" y="80" width="180" height="72" rx="10" fill="#2b2b30"/>
+    <text x="692" y="108">4. Incognito</text>
+    <text x="692" y="128" fill="#a1a1aa">Open the URL, enter code</text>
+
+    <path d="M214 116 H238" stroke="#8eb4ff" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M448 116 H472" stroke="#8eb4ff" stroke-width="2"/>
+    <path d="M652 116 H676" stroke="#8eb4ff" stroke-width="2"/>
+
+    <rect x="24" y="190" width="400" height="100" rx="10" fill="#243044" stroke="#3d5a80"/>
+    <text x="40" y="218" font-weight="600">GROK_HOME on the child only</text>
+    <text x="40" y="242" fill="#d4d4d8">Set to that icon's CLI home, for example ~/.grok</text>
+    <text x="40" y="264" fill="#d4d4d8">GROK_CREDENTIALS_FILE is cleared on the child</text>
+
+    <rect x="456" y="190" width="400" height="100" rx="10" fill="#243044" stroke="#3d5a80"/>
+    <text x="472" y="218" font-weight="600">Session stays in that home</text>
+    <text x="472" y="242" fill="#d4d4d8">grok writes auth.json inside the CLI home</text>
+    <text x="472" y="264" fill="#d4d4d8">The applet does not write the session file</text>
+
+    <rect x="24" y="320" width="832" height="112" rx="10" fill="#2b2b30"/>
+    <text x="40" y="350" font-weight="600">5. The same icon loads usage</text>
+    <text x="40" y="374" fill="#d4d4d8">When auth.json has a session, the applet reads that bearer and requests</text>
+    <text x="40" y="396" fill="#d4d4d8">the shared weekly percent. Sign out is `grok logout` with the same home.</text>
+    <text x="40" y="418" fill="#a1a1aa">A plain `grok login` in a terminal is not used. It can attach the wrong account.</text>
+  </g>
+</svg>

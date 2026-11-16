@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="520" viewBox="0 0 880 520" role="img" aria-labelledby="title desc">
+  <title id="title">How Grok Monitor turns config into panel chips</title>
+  <desc id="desc">Data-flow diagram. One configured account becomes one chip. Build and Bot are not added.</desc>
+  <rect width="880" height="520" fill="#141416"/>
+  <text x="24" y="32" fill="#f4f4f5" font-family="sans-serif" font-size="18" font-weight="600">One account, one percent</text>
+  <text x="24" y="54" fill="#a1a1aa" font-family="sans-serif" font-size="13">Illustration. Product rows inside the shared pool are not added to the chip.</text>
+
+  <g font-family="sans-serif" font-size="13" fill="#f4f4f5">
+    <rect x="24" y="80" width="200" height="64" rx="10" fill="#2b2b30"/>
+    <text x="40" y="106">accounts list</text>
+    <text x="40" y="126" fill="#a1a1aa">label + cli_home</text>
+
+    <rect x="268" y="80" width="200" height="64" rx="10" fill="#2b2b30"/>
+    <text x="284" y="106">Icon, config order</text>
+    <text x="284" y="126" fill="#a1a1aa">~/ expanded for you</text>
+
+    <rect x="512" y="80" width="160" height="64" rx="10" fill="#2b2b30"/>
+    <text x="528" y="106">CLI home</text>
+    <text x="528" y="126" fill="#a1a1aa">auth.json</text>
+
+    <rect x="700" y="80" width="156" height="64" rx="10" fill="#1e3a2a" stroke="#2eb852"/>
+    <text x="716" y="106">One chip</text>
+    <text x="716" y="126" fill="#d4d4d8">one percent</text>
+
+    <path d="M224 112 H268" stroke="#8eb4ff" stroke-width="2"/>
+    <path d="M468 112 H512" stroke="#8eb4ff" stroke-width="2"/>
+    <path d="M672 112 H700" stroke="#8eb4ff" stroke-width="2"/>
+
+    <rect x="24" y="180" width="400" height="120" rx="10" fill="#243044"/>
+    <text x="40" y="208" font-weight="600">Billing request</text>
+    <text x="40" y="232" fill="#d4d4d8">GET cli-chat-proxy.grok.com/v1/billing</text>
+    <text x="40" y="254" fill="#d4d4d8">?format=credits</text>
+    <text x="40" y="276" fill="#a1a1aa">Bearer from that home only. Not logged.</text>
+
+    <rect x="456" y="180" width="400" height="120" rx="10" fill="#243044"/>
+    <text x="472" y="208" font-weight="600">What becomes the number</text>
+    <text x="472" y="232" fill="#d4d4d8">creditUsagePercent on a unified plan</text>
+    <text x="472" y="254" fill="#d4d4d8">Grok Build row only if the plan is not unified</text>
+    <text x="472" y="276" fill="#a1a1aa">Missing headline is not replaced by a sum</text>
+
+    <rect x="24" y="332" width="250" height="72" rx="10" fill="#2b2b30"/>
+    <text x="40" y="362">Grok Build</text>
+    <text x="40" y="382" fill="#a1a1aa">same weekly pool</text>
+    <rect x="314" y="332" width="250" height="72" rx="10" fill="#2b2b30"/>
+    <text x="330" y="362">Grok Bot</text>
+    <text x="330" y="382" fill="#a1a1aa">same weekly pool</text>
+    <rect x="604" y="332" width="252" height="72" rx="10" fill="#3a2a1e" stroke="#f2a35a"/>
+    <text x="620" y="362">Grok API Monitor</text>
+    <text x="620" y="382" fill="#d4d4d8">separate prepaid dollars</text>
+
+    <text x="24" y="440" fill="#d4d4d8">Build and Bot are not two meters. The retired Bot slot does not poll and does not read profile directories.</text>
+    <text x="24" y="464" fill="#a1a1aa">grok itself is resolved from grok_path, then PATH, ~/.grok/bin, the newest nvm install,</text>
+    <text x="24" y="484" fill="#a1a1aa">~/.bun/bin, and ~/.local/bin. That lookup does not change the panel environment.</text>
+    <text x="24" y="508" fill="#8e8e96">Empty accounts list → no chips. Missing accounts file → the two default icons.</text>
+  </g>
+</svg>

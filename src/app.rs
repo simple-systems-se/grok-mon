@@ -469,34 +469,7 @@ impl GrokMonitor {
             let Some(chip) = self.accounts.iter_mut().find(|chip| chip.id == item.id) else {
                 continue;
             };
-            match item.result {
-                Ok(snapshot) => {
-                    chip.error = None;
-                    if chip.history.len() == HISTORY_LEN {
-                        chip.history.pop_front();
-                    }
-                    chip.history.push_back(snapshot.percent);
-                    chip.snapshot = Some(snapshot);
-                    if chip.login.phase == LoginPhase::Succeeded {
-                        chip.login.phase = LoginPhase::Idle;
-                        chip.login.message.clear();
-                    }
-                }
-                Err(err) => {
-                    if chip.login.is_in_progress() && matches!(err, FetchError::Auth(_)) {
-                        continue;
-                    }
-                    if matches!(err, FetchError::Auth(_)) {
-                        chip.snapshot = None;
-                        chip.history.clear();
-                        if chip.login.phase == LoginPhase::Succeeded {
-                            chip.login.apply(LoginUpdate::Failed(err.to_string()));
-                            continue;
-                        }
-                    }
-                    chip.error = Some(err);
-                }
-            }
+            absorb_fetch(chip, item.result);
         }
     }
 
@@ -524,12 +497,11 @@ impl GrokMonitor {
             if let Some(finish) = update.finished {
                 self.jobs.remove(&id);
                 if let Some(chip) = self.chip_mut(&id) {
-                    if chip.login.phase == LoginPhase::Succeeded || session_ready {
-                        if chip.login.phase != LoginPhase::Succeeded && session_ready {
-                            chip.login.apply(LoginUpdate::SessionReady);
-                            fetch = true;
-                        }
-                    } else {
+                    let already_succeeded = chip.login.phase == LoginPhase::Succeeded;
+                    if !already_succeeded && session_ready {
+                        chip.login.apply(LoginUpdate::SessionReady);
+                        fetch = true;
+                    } else if !already_succeeded {
                         if !finish.success {
                             tracing::error!("device-code sign-in failed");
                         }
@@ -1041,28 +1013,86 @@ fn apply_icon(chip: &mut AccountChip, icon: ResolvedIcon) {
     }
 }
 
-fn chip_label(account: &AccountChip, config: &Config) -> (String, Color) {
-    let theme = theme::active();
-    let cosmic = theme.cosmic();
+#[derive(Debug)]
+enum PanelText {
+    Loading,
+    Percent { shown: f32, used: f32, dimmed: bool },
+    SignedOut,
+    Failed,
+}
+
+fn panel_text(account: &AccountChip, config: &Config) -> PanelText {
     if account.snapshot.is_none()
         && (account.login.is_in_progress() || account.login.phase == LoginPhase::Succeeded)
     {
-        return ("…".into(), cosmic.on_bg_color().into());
+        return PanelText::Loading;
     }
     match (&account.snapshot, &account.error) {
-        (Some(snapshot), err) => {
-            let mut color = usage_color(snapshot.percent);
-            if err.is_some() {
+        (Some(snapshot), err) => PanelText::Percent {
+            shown: config.display_percent(snapshot.percent),
+            used: snapshot.percent,
+            dimmed: err.is_some(),
+        },
+        (None, Some(FetchError::Auth(_))) => PanelText::SignedOut,
+        (None, Some(_)) => PanelText::Failed,
+        (None, None) => PanelText::Loading,
+    }
+}
+
+fn chip_label(account: &AccountChip, config: &Config) -> (String, Color) {
+    let theme = theme::active();
+    let cosmic = theme.cosmic();
+    match panel_text(account, config) {
+        PanelText::Loading => ("…".into(), cosmic.on_bg_color().into()),
+        PanelText::Percent {
+            shown,
+            used,
+            dimmed,
+        } => {
+            let mut color = usage_color(used);
+            if dimmed {
                 color.a *= 0.7;
             }
-            (
-                format_percent(config.display_percent(snapshot.percent)),
-                color,
-            )
+            (format_percent(shown), color)
         }
-        (None, Some(FetchError::Auth(_))) => ("—".into(), cosmic.on_bg_color().into()),
-        (None, Some(_)) => ("?".into(), cosmic.warning_color().into()),
-        (None, None) => ("…".into(), cosmic.on_bg_color().into()),
+        PanelText::SignedOut => ("—".into(), cosmic.on_bg_color().into()),
+        PanelText::Failed => ("?".into(), cosmic.warning_color().into()),
+    }
+}
+
+fn absorb_fetch(chip: &mut AccountChip, result: Result<UsageSnapshot, FetchError>) {
+    match result {
+        Ok(snapshot) => {
+            chip.error = None;
+            if chip.history.len() == HISTORY_LEN {
+                chip.history.pop_front();
+            }
+            chip.history.push_back(snapshot.percent);
+            chip.snapshot = Some(snapshot);
+            if chip.login.phase == LoginPhase::Succeeded {
+                chip.login.phase = LoginPhase::Idle;
+                chip.login.message.clear();
+            }
+        }
+        Err(err) => {
+            if chip.login.is_in_progress() && matches!(err, FetchError::Auth(_)) {
+                return;
+            }
+            if matches!(&err, FetchError::Auth(_)) {
+                chip.snapshot = None;
+                chip.history.clear();
+                chip.error = Some(err.clone());
+                if chip.login.phase == LoginPhase::Succeeded {
+                    chip.login.apply(LoginUpdate::Failed(err.to_string()));
+                }
+                return;
+            }
+            if chip.login.phase == LoginPhase::Succeeded {
+                chip.login.phase = LoginPhase::Idle;
+                chip.login.message.clear();
+            }
+            chip.error = Some(err);
+        }
     }
 }
 
@@ -1117,4 +1147,98 @@ fn poll_button<'a>(secs: u64, current: u64) -> Element<'a, Message> {
 
 fn padded<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     cosmic::applet::padded_control(content).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::AuthError;
+
+    #[test]
+    fn sign_in_then_expired_session_shows_signed_out() {
+        let mut chip = AccountChip::default();
+        chip.login.apply(LoginUpdate::SessionReady);
+        absorb_fetch(&mut chip, Err(FetchError::Auth(AuthError::Expired)));
+        assert!(chip.snapshot.is_none());
+        assert!(matches!(
+            chip.error,
+            Some(FetchError::Auth(AuthError::Expired))
+        ));
+        assert_eq!(chip.login.phase, LoginPhase::Failed);
+        assert!(matches!(
+            panel_text(&chip, &Config::default()),
+            PanelText::SignedOut
+        ));
+    }
+
+    #[test]
+    fn sign_in_then_http_failure_shows_the_error() {
+        let mut chip = AccountChip::default();
+        chip.login.apply(LoginUpdate::SessionReady);
+        absorb_fetch(&mut chip, Err(FetchError::Http("billing HTTP 500".into())));
+        assert_eq!(chip.login.phase, LoginPhase::Idle);
+        assert!(chip.login.message.is_empty());
+        assert!(matches!(chip.error, Some(FetchError::Http(_))));
+        assert!(matches!(
+            panel_text(&chip, &Config::default()),
+            PanelText::Failed
+        ));
+    }
+
+    #[test]
+    fn auth_error_during_sign_in_does_not_clobber_the_prompt() {
+        let mut chip = AccountChip::default();
+        chip.login.apply(LoginUpdate::Started);
+        chip.login
+            .apply(LoginUpdate::Prompt(crate::login::DevicePrompt {
+                verification_url: Some("https://auth.example/device".into()),
+                user_code: Some("ABCD-EFGH".into()),
+            }));
+        let prompt = chip.login.prompt.clone();
+        absorb_fetch(&mut chip, Err(FetchError::Auth(AuthError::Missing)));
+        assert_eq!(chip.login.phase, LoginPhase::Waiting);
+        assert_eq!(chip.login.prompt, prompt);
+        assert!(chip.error.is_none());
+        assert!(matches!(
+            panel_text(&chip, &Config::default()),
+            PanelText::Loading
+        ));
+    }
+
+    #[test]
+    fn successful_fetch_after_sign_in_clears_the_loading_phase() {
+        let mut chip = AccountChip::default();
+        chip.login.apply(LoginUpdate::SessionReady);
+        absorb_fetch(
+            &mut chip,
+            Ok(UsageSnapshot {
+                account_id: String::new(),
+                percent: 12.5,
+                used: None,
+                limit: None,
+                resets_at: None,
+                starts_at: None,
+                period_type: Some("WEEKLY".into()),
+                plan: None,
+                email: None,
+                fetched_at: chrono::Utc::now(),
+                unified: true,
+            }),
+        );
+        assert_eq!(chip.login.phase, LoginPhase::Idle);
+        assert!(chip.error.is_none());
+        assert!(chip.snapshot.is_some());
+        match panel_text(&chip, &Config::default()) {
+            PanelText::Percent {
+                shown,
+                used,
+                dimmed,
+            } => {
+                assert_eq!(shown, 13.0);
+                assert!((used - 12.5).abs() < f32::EPSILON);
+                assert!(!dimmed);
+            }
+            other => panic!("expected a percent, got {other:?}"),
+        }
+    }
 }

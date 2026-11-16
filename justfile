@@ -71,7 +71,7 @@ install-user: build-release
     @echo "Add “Grok Monitor” or “Grok API Monitor” in COSMIC Settings → Desktop → Panel → Applets."
     @echo "Grok Monitor icons come from ~/.config/cosmic/io.github.simple-systems-se.grok-mon/v1/accounts."
     @echo "Remove “Grok Bot Monitor” if it is still on the panel. Sign in from each Grok Monitor icon."
-    @echo "If an applet does not appear, run: pkill cosmic-panel"
+    @echo "If an applet does not appear, run: pkill -x cosmic-panel"
 
 uninstall-user:
     rm -f {{bin-dst}} {{desktop-dst}} {{icon-dst}} {{icon-symbolic-dst}} {{metainfo-dst}} \

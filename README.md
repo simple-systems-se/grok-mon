@@ -1,49 +1,72 @@
 # Grok Monitor
 
-A panel applet for the [COSMIC™](https://github.com/pop-os/cosmic-epoch) desktop that shows the
-shared weekly Grok usage pool **once per account**. Grok Build and Grok Bot draw
-from that pool on current xAI plans, so a second Bot meter would count the same
-usage again. The chip uses the same billing endpoint as `/usage` in the Grok
-CLI (`creditUsagePercent`). A separate applet, **Grok API Monitor**, still shows
-remaining prepaid dollars for xAI API tokens.
+A panel applet for the [COSMIC™](https://github.com/pop-os/cosmic-epoch) desktop
+on Pop!_OS 24.04. It shows the shared weekly Grok usage pool **once per
+configured account**. Grok Build and Grok Bot draw from that pool on current
+xAI plans, so a second Bot meter would count the same usage again. The chip
+uses the same billing endpoint as `/usage` in the Grok CLI
+(`creditUsagePercent`).
 
-The work account chip is labeled **Grok (sim sys)** and uses the CLI home
-`~/.grok`. The personal account chip is labeled **Grok (pers)** and uses
-`~/.grok-personal`. Those two icons are the default. The panel shows only the
-icons listed in config, in that order.
+A second applet, **Grok API Monitor**, shows remaining prepaid dollars for xAI
+API tokens. It is not part of the weekly chips.
 
-**Grok Bot Monitor** is a retired panel slot. It no longer polls usage. Remove
-it from the panel after updating (see below). That step is done in COSMIC
-Settings; the package does not edit the panel layout.
+The default panel, when you have not written an accounts file, is two icons in
+this order:
 
-This is an unofficial community project. It is not affiliated with, endorsed by,
-or supported by xAI or Cursor.
+| Chip | CLI home |
+|------|----------|
+| **Grok (sim sys)** | `~/.grok` |
+| **Grok (pers)** | `~/.grok-personal` |
+
+The panel shows only the icons in your accounts list, in that order. It does
+not scan CLI homes or Grok Bot profiles to invent extra icons.
+
+**Grok Bot Monitor** is a retired panel slot. It does not poll usage and it
+does not read Grok Bot profile directories. Remove it from the panel after
+updating. The package does not edit the panel layout. That step is in COSMIC
+Settings.
+
+This is an unofficial community project. It is not affiliated with, endorsed
+by, or supported by xAI or Cursor.
+
+![Illustration of two panel chips, Grok (sim sys) and Grok (pers)](docs/panel-chips.svg)
+
+*Illustration. The percents in the picture are a sample layout, not a live reading.*
+
+## Contents
+
+- [Requirements](#requirements)
+- [Install](#install)
+- [Add it to the panel](#add-it-to-the-panel)
+- [Configure accounts](#configure-accounts)
+- [Every config key](#every-config-key)
+- [Sign in and sign out](#sign-in-and-sign-out)
+- [What the chip and popup show](#what-the-chip-and-popup-show)
+- [How a reading is produced](#how-a-reading-is-produced)
+- [Weekly pace](#weekly-pace)
+- [Grok API Monitor](#grok-api-monitor)
+- [Troubleshooting](#troubleshooting)
+- [Uninstall](#uninstall)
+- [Development](#development)
+- [Privacy](#privacy)
+- [License](#license)
 
 ## Requirements
 
-Shared:
+To run a packaged build:
 
-- The COSMIC™ desktop
+- The COSMIC™ desktop (Pop!_OS 24.04 or another COSMIC session)
+- A [Grok CLI](https://grok.com) named `grok` for Grok Monitor
+- A [Management API key](https://docs.x.ai/developers/management-api-guide) for
+  Grok API Monitor only
+
+To build from source:
+
 - Rust 1.88 or newer (edition 2024), via [rustup](https://rustup.rs)
-- `pkg-config`, a C toolchain, and the libxkbcommon development headers
-- [`just`](https://github.com/casey/just) (optional; wraps the Cargo and install
-  commands below)
-
-Grok Monitor:
-
-- A [Grok CLI](https://grok.com) (`grok`). The applet looks it up on `PATH`,
-  then in `~/.grok/bin`, the newest nvm Node install, `~/.bun/bin`, and
-  `~/.local/bin`. Set `grok_path` (below) to use one exact binary.
-- Sign in from each panel icon. The icon runs `grok login --device-code` with
-  `GROK_HOME` set to that icon's CLI home only. Finish the code in an
-  Incognito window so the browser profile that is already signed in does not
-  get attached again
-
-Grok API Monitor:
-
-- A [Management API key](https://docs.x.ai/developers/management-api-guide)
-  from the [xAI Console](https://console.x.ai) (Settings → Management Keys)
-  with billing read access. Inference keys (`XAI_API_KEY`) do not work.
+- `pkg-config`, a C toolchain, and the libxkbcommon, wayland, expat,
+  fontconfig, and freetype development headers
+- [`just`](https://github.com/casey/just) is optional. It wraps the Cargo and
+  install commands below.
 
 On Debian, Ubuntu, and Pop!_OS:
 
@@ -52,28 +75,55 @@ sudo apt install build-essential pkg-config libxkbcommon-dev \
   libwayland-dev libexpat1-dev libfontconfig-dev libfreetype6-dev
 ```
 
-Other distributions need the equivalent packages (`libxkbcommon-devel`,
-`wayland-devel`, `expat-devel`, `fontconfig-devel`, `freetype-devel` on Fedora).
+Fedora equivalents: `libxkbcommon-devel`, `wayland-devel`, `expat-devel`,
+`fontconfig-devel`, `freetype-devel`.
 
 ## Install
 
-On Pop!_OS 24 (or Ubuntu 24.04 amd64), install a release `.deb`:
+Pick one of the three methods. All of them install the same binary. The
+`.desktop` files register three applets: Grok Monitor, the retired Grok Bot
+Monitor slot, and Grok API Monitor.
+
+### Debian package
+
+On Pop!_OS 24 or Ubuntu 24.04 amd64, download the `.deb` from
+[GitHub Releases](https://github.com/simple-systems-se/grok-mon/releases):
 
 ```sh
 sudo apt install ./cosmic-ext-applet-grok-monitor_*_amd64.deb
 ```
 
-Download that package from
-[GitHub Releases](https://github.com/simple-systems-se/grok-mon/releases).
-Each release also has a stripped binary tarball if you prefer not to use `apt`.
+`apt install` of a newer `.deb` replaces the binary. It does not change which
+applets are pinned to the panel.
 
-To build from source and install for the current user:
+### Binary tarball
+
+Each release also has a stripped tarball,
+`cosmic-ext-applet-grok-monitor-<version>-linux-amd64.tar.gz`, for a user
+install without `apt`. It contains the binary, `LICENSE`, `README.md`, and
+`res/`.
+
+```sh
+tar -xzf cosmic-ext-applet-grok-monitor-*-linux-amd64.tar.gz
+cd cosmic-ext-applet-grok-monitor-*-linux-amd64
+install -Dm0755 cosmic-ext-applet-grok-monitor ~/.local/bin/cosmic-ext-applet-grok-monitor
+```
+
+Then install the desktop files, icons, and metainfo from `res/` the same way
+as the from-source steps below. Point `Exec=` at
+`$HOME/.local/bin/cosmic-ext-applet-grok-monitor`.
+
+### From source
 
 ```sh
 git clone https://github.com/simple-systems-se/grok-mon.git
 cd grok-mon
 just install-user
 ```
+
+`just install-user` builds the release binary and installs it for the user
+running the command (`~/.local`). It does not change other users, and it does
+not remove an applet that is already pinned.
 
 Without `just`:
 
@@ -83,145 +133,51 @@ cargo build --release
 install -Dm0755 target/release/cosmic-ext-applet-grok-monitor \
   ~/.local/bin/cosmic-ext-applet-grok-monitor
 
-mkdir -p ~/.local/share/applications
+mkdir -p ~/.local/share/applications ~/.local/share/metainfo
 sed "s|^Exec=.*|Exec=$HOME/.local/bin/cosmic-ext-applet-grok-monitor|" \
   res/io.github.simple-systems-se.grok-mon.desktop \
   > ~/.local/share/applications/io.github.simple-systems-se.grok-mon.desktop
-
-install -Dm0644 res/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon.svg \
-  ~/.local/share/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon.svg
-install -Dm0644 res/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon.svg \
-  ~/.local/share/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-symbolic.svg
-install -Dm0644 res/io.github.simple-systems-se.grok-mon.metainfo.xml \
-  ~/.local/share/metainfo/io.github.simple-systems-se.grok-mon.metainfo.xml
-
 sed "s|^Exec=.*|Exec=$HOME/.local/bin/cosmic-ext-applet-grok-monitor --product=bot|" \
   res/io.github.simple-systems-se.grok-mon-bot.desktop \
   > ~/.local/share/applications/io.github.simple-systems-se.grok-mon-bot.desktop
-
-install -Dm0644 res/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-bot.svg \
-  ~/.local/share/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-bot.svg
-install -Dm0644 res/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-bot.svg \
-  ~/.local/share/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-bot-symbolic.svg
-install -Dm0644 res/io.github.simple-systems-se.grok-mon-bot.metainfo.xml \
-  ~/.local/share/metainfo/io.github.simple-systems-se.grok-mon-bot.metainfo.xml
-
 sed "s|^Exec=.*|Exec=$HOME/.local/bin/cosmic-ext-applet-grok-monitor --product=api|" \
   res/io.github.simple-systems-se.grok-mon-api.desktop \
   > ~/.local/share/applications/io.github.simple-systems-se.grok-mon-api.desktop
 
-install -Dm0644 res/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-api.svg \
-  ~/.local/share/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-api.svg
-install -Dm0644 res/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-api.svg \
-  ~/.local/share/icons/hicolor/scalable/apps/io.github.simple-systems-se.grok-mon-api-symbolic.svg
-install -Dm0644 res/io.github.simple-systems-se.grok-mon-api.metainfo.xml \
-  ~/.local/share/metainfo/io.github.simple-systems-se.grok-mon-api.metainfo.xml
+for id in io.github.simple-systems-se.grok-mon \
+          io.github.simple-systems-se.grok-mon-bot \
+          io.github.simple-systems-se.grok-mon-api
+do
+  install -Dm0644 "res/icons/hicolor/scalable/apps/${id}.svg" \
+    "$HOME/.local/share/icons/hicolor/scalable/apps/${id}.svg"
+  install -Dm0644 "res/icons/hicolor/scalable/apps/${id}.svg" \
+    "$HOME/.local/share/icons/hicolor/scalable/apps/${id}-symbolic.svg"
+  install -Dm0644 "res/${id}.metainfo.xml" \
+    "$HOME/.local/share/metainfo/${id}.metainfo.xml"
+done
 ```
 
-Add **Grok Monitor** or **Grok API Monitor** in
-**COSMIC Settings → Desktop → Panel → Applets**. Do not add **Grok Bot Monitor**.
-If a new applet does not appear, restart the panel:
-
-```sh
-pkill cosmic-panel
-```
-
-`just install-user` installs only for the user running it (`~/.local`). It does
-not change other users, and it does not remove an applet that is already pinned
-to the panel.
-
-## Update on Pop!_OS COSMIC
-
-Grok Build and Grok Bot now share one weekly pool. After you install or upgrade:
+## Add it to the panel
 
 1. Open **COSMIC Settings → Desktop → Panel → Applets**.
-2. Remove **Grok Bot Monitor** if it is on the panel. This is a manual step.
-   The package keeps the old desktop file so the slot does not go blank, and
-   that slot now only tells you to remove it. It does not fetch usage.
-3. Keep **Grok Monitor**. It shows one chip per entry in the accounts list.
-   The default list is **Grok (sim sys)** (`~/.grok`) and **Grok (pers)**
-   (`~/.grok-personal`).
-4. Keep **Grok API Monitor** if you watch prepaid API credits. That applet is
-   unchanged. It is not part of the weekly chips.
-5. If the updated applet does not show up, run `pkill cosmic-panel`.
-
-Sign-in stays in each icon's CLI home. Click the icon and choose **Sign in**.
-Do not run a plain `grok login` or `grok logout` in a terminal for this: that
-uses whichever `GROK_HOME` the shell has, and it can attach the wrong account.
-The applet does not set `GROK_HOME` on itself.
-
-Settings already stored for poll interval, sparkline, used/remaining, and pace
-stay. Panel labels now come from the accounts list, not from the old
-discovered-account label map.
-
-To install the upgrade for the current user without `sudo`, from a git checkout:
+2. Add **Grok Monitor**, and **Grok API Monitor** if you watch prepaid API
+   credit.
+3. Do not add **Grok Bot Monitor**. If it is already on the panel from an
+   older install, remove it here. The package keeps that desktop file so the
+   slot does not go blank; the slot only tells you to remove it.
+4. If a newly installed applet does not appear, restart the panel:
 
 ```sh
-just install-user
+pkill -x cosmic-panel
 ```
 
-Or, for a system package on Pop!_OS 24 / Ubuntu 24.04 amd64:
+`-x` matches the process name `cosmic-panel` exactly. COSMIC starts the panel
+again on its own.
 
-```sh
-sudo apt install ./cosmic-ext-applet-grok-monitor_*_amd64.deb
-```
+## Configure accounts
 
-`apt install` of a newer `.deb` replaces the binary. It still does not edit the
-panel. Do the applet removal in Settings after the package is installed.
-
-## Usage
-
-The panel chip shows a circular usage ring (the same shape Minimon uses for
-memory) with a small **hammer** (Grok) or **key** (API) in the center, plus a
-label. Grok shows one chip per account. By default that chip shows current
-usage of the shared pool as a whole percent. API shows remaining prepaid
-dollars. Settings can hide the number or (for Grok) switch the number and ring
-fill to percent remaining.
-Color follows percent **used**, stepped each whole percent: green 0–50%, yellow
-50–80%, orange 80–90%, red 90%+. For API, that percent used is remaining
-prepaid mapped against a $50 full wallet (green above $25, yellow through $10,
-orange through $5, red under $5).
-
-Click a chip for a popup with:
-
-- Plan name and account email
-- The icon's CLI home
-- Usage bar (0–100, colored like the ring) and percent
-- **Shared weekly pool** when the account is on unified billing
-- Weekly or monthly reset time
-- Weekly pace: time until credits run out at the current burn, or how much is left at reset if they will last the week
-- How long ago usage was fetched
-- Live Grok CLI session count for that icon's CLI home
-- **Sign in** or **Sign out** for that icon only
-- **Open usage** (opens [grok.com usage](https://grok.com/?_s=usage))
-- **Copy** (copies the percent)
-- **Settings**
-
-**Sign in** starts a device-code login for that icon's CLI home. The popup
-shows the URL and the user code. Open the URL in an **Incognito** window and
-enter the code. The popup waits until that home has a session or the login
-fails. It does not open the system browser. After the session is saved, the
-icon shows that account's weekly usage.
-
-**Sign out** runs `grok logout` with `GROK_HOME` set to that same home.
-
-Panel states:
-
-| Chip | Meaning |
-|------|---------|
-| `…` | Fetching, or a sign-in is in progress |
-| `—` | Not signed in, or the session has expired |
-| `?` | Request failed, the accounts file could not be read, or there is no previous reading |
-| dimmed percent | Last good reading; the latest poll failed |
-
-If you see `—`, open that icon and choose **Sign in**. On Grok API Monitor,
-add a Management API key (see below).
-
-## Accounts
-
-Grok Monitor shows one chip per configured icon. It does not scan CLI homes,
-Grok Bot profiles, or leftover sessions to invent icons, and it does not merge
-two entries that happen to share an email. It does not add percents together.
+Grok Monitor shows one chip per entry. It does not merge two entries that
+share an email, and it does not add their percents together.
 
 The list is the COSMIC config key `accounts`:
 
@@ -230,9 +186,10 @@ The list is the COSMIC config key `accounts`:
 ```
 
 The file is [RON](https://github.com/ron-rs/ron). Each entry has `label` and
-`cli_home`. `cli_home` is that icon's Grok CLI home. The applet passes it as
-`GROK_HOME` only to the `grok` process for that icon. A leading `~/` is
-expanded for the current user. Order in the file is the panel order.
+`cli_home`. `cli_home` is that icon's Grok CLI home. The applet passes the
+expanded path as `GROK_HOME` only to the `grok` process for that icon. A
+leading `~/` is expanded for the current user. `~other/…` is rejected. Order
+in the file is the panel order.
 
 ```ron
 [
@@ -247,75 +204,206 @@ expanded for the current user. Order in the file is the panel order.
 ]
 ```
 
-| Config | What the panel shows |
-|--------|----------------------|
-| Key missing | The two icons above |
+| Accounts file | What the panel shows |
+|---------------|----------------------|
+| Key missing | **Grok (sim sys)** then **Grok (pers)** |
 | `[]` | No icons |
 | A list | Exactly those icons, in order |
-| File present but not valid RON | No icons, and a config error on the panel |
+| Present, but not valid RON | No icons, and a config error on the panel |
 
-Other applet settings (poll interval, sparkline, pace, `grok_path`) are sibling
-keys in the same `v1` directory. Editing `accounts` does not require a settings
-UI.
+Editing `accounts` does not require the settings UI. The other keys below are
+sibling files in the same `v1` directory.
 
-### `grok_path`
+Panel labels come from each entry's `label`. An empty label falls back to the
+`cli_home` text you wrote. The popup **Settings** page edits the label of the
+icon you opened.
 
-Sign in and sign out both run the `grok` binary. The panel's `PATH` is often
-too short to include the official installer (`~/.grok/bin/grok`) or a copy
-installed with nvm. The applet resolves one executable, in this order, and
-uses that path for every `grok` launch (`login --device-code` and `logout`):
+## Every config key
 
-1. The `grok_path` key, when it is a non-empty path to a regular executable
-   file. Symlinks are followed. A leading `~/` is expanded for the current
-   user. Empty or missing means keep searching.
-2. The first regular executable named `grok` on `PATH`.
-3. `~/.grok/bin/grok`
-4. The newest `~/.nvm/versions/node/*/bin/grok`, chosen by Node's semantic
-   version, not by file modification time.
-5. `~/.bun/bin/grok`
-6. `~/.local/bin/grok`
+COSMIC stores each key as its own RON file under:
 
 ```
-~/.config/cosmic/io.github.simple-systems-se.grok-mon/v1/grok_path
+~/.config/cosmic/io.github.simple-systems-se.grok-mon/v1/
 ```
 
-The file is a RON string:
+Grok API Monitor uses the same key names under
+`io.github.simple-systems-se.grok-mon-api`. The retired Bot id
+`io.github.simple-systems-se.grok-mon-bot` is left on disk. It is not used to
+choose Grok Monitor icons.
+
+| Key | Default | Applies to | What it does |
+|-----|---------|------------|--------------|
+| `poll_secs` | `60` | Grok and API | How often to refresh. The settings buttons are 30s, 60s, and 5m (300). Values outside 15–600 seconds are clamped. |
+| `show_sparkline` | `false` | Grok and API | Draw a small history beside the chip. |
+| `show_percent` | `true` | Grok | Show the whole-number percent on the chip. `—`, `…`, and `?` still show when there is no reading. |
+| `show_percent` | `true` | API | Show the dollar amount on the chip. The settings row calls this “Amount on panel”. |
+| `show_remaining` | `false` | Grok | `false` shows percent used. `true` shows percent remaining. The ring fill follows this. Color always follows percent used. |
+| `show_pace` | `true` | Grok | Show the weekly pace line in the popup. |
+| `account_labels` | `{}` | API, and preserved on Grok | Map of chip id to label. Grok Monitor chip text comes from `accounts[].label`. The map is still loaded and written back with the rest of the config, so an existing file is kept. API Monitor uses the entry `"default"`. |
+| `accounts` | the two icons above | Grok | Panel icons. See the table in [Configure accounts](#configure-accounts). |
+| `grok_path` | `""` | Grok | Optional path to the `grok` binary. Empty means search. See below. |
+
+`show_remaining` does nothing on the API chip. That chip is remaining dollars,
+and its ring is full at $50 remaining.
+
+Example `grok_path` file (`v1/grok_path`), a RON string:
 
 ```ron
 "/home/you/.grok/bin/grok"
 ```
 
-The applet does not change its own `PATH` or `GROK_HOME`. `GROK_HOME` is set
-only on the `grok` child, to that icon's CLI home. If nothing usable is found,
-the popup says the grok CLI was not found and lists the places it checked.
+A leading `~/` is expanded. Symlinks are followed. The file must be a regular
+executable. An empty string, a missing file, or a non-executable is skipped
+and the search continues.
 
-The percent on a chip is that CLI home's `creditUsagePercent` from
+These older names are **not** read by 0.4.x. Leaving the files on disk is
+harmless; COSMIC ignores keys this version does not list:
+
+| Leftover file | What to do |
+|---------------|------------|
+| `cli_homes` | Not a 0.4 key. Put each home in `accounts`. |
+| `warn_percent`, `critical_percent` | Not read. Color is a continuous scale, not two thresholds. |
+
+## Sign in and sign out
+
+Sign in from the icon whose CLI home should receive the session. The popup
+shows the URL and the user code. It does not open the system browser.
+
+![Diagram of device-code sign-in](docs/sign-in-flow.svg)
+
+```mermaid
+sequenceDiagram
+    actor You
+    participant Panel as Grok Monitor
+    participant CLI as grok child
+    participant Home as That icon's CLI home
+    You->>Panel: Click the chip, then Sign in
+    Panel->>CLI: grok login --device-code
+    Note over Panel,CLI: GROK_HOME is set only on this child
+    CLI-->>Panel: URL and user code
+    Panel-->>You: Show both in the popup
+    You->>You: Open the URL in an Incognito window and enter the code
+    CLI->>Home: grok writes auth.json
+    Panel->>Home: Read the session, then fetch weekly usage
+```
+
+1. Click the chip and choose **Sign in**.
+2. The applet runs `grok login --device-code` (`--device-code` is the alias of
+   `--device-auth`). It does not run a plain `grok login` or
+   `grok login --oauth`, because those open the system browser.
+3. `GROK_HOME` on that child is the expanded CLI home for the icon.
+   `GROK_CREDENTIALS_FILE` is removed from the child so another home cannot
+   redirect the session. The panel process keeps its own environment.
+4. Copy the URL or the code from the popup if you want. Open the URL in an
+   **Incognito** window and enter the code. A normal window can attach whichever
+   account is already signed in there.
+5. The popup waits until that home has a session, you press **Cancel**, or the
+   login fails. The URL and the code are not written to the log.
+6. **Sign out** runs `grok logout` with `GROK_HOME` set to that same home.
+
+Do not run `grok login` or `grok logout` in a terminal for these icons. The
+shell's `GROK_HOME` may be a different account.
+
+The `grok` binary is resolved once per launch, in this order. The search does
+not change the panel's `PATH` or `HOME`:
+
+1. `grok_path`, when it is a non-empty path to a regular executable.
+2. The first regular executable named `grok` on `PATH`.
+3. `~/.grok/bin/grok`
+4. The newest `~/.nvm/versions/node/*/bin/grok`, by Node's semantic version,
+   not by file modification time. A stable release sorts above a prerelease
+   with the same numbers.
+5. `~/.bun/bin/grok`
+6. `~/.local/bin/grok`
+
+Directories, broken symlinks, and files without an execute bit are skipped.
+If nothing usable is found, the popup says the grok CLI was not found and
+lists the places it checked. It does not show a raw operating-system error
+number.
+
+## What the chip and popup show
+
+![Illustration of the usage popup](docs/popup.svg)
+
+*Illustration. The plan name, address, percent, and times in the picture are sample copy, not a live reading.*
+
+The chip is a circular usage ring (the same shape Minimon uses for memory)
+with a hammer (Grok) or a key (API) in the center. The ring, the track, and
+the popup body use opaque theme colors. By default a Grok chip shows the
+shared pool as a whole percent used. Settings can hide the number or switch
+the number and the ring fill to percent remaining.
+
+Color follows percent **used**, with a distinct shade at each whole percent:
+green through 50%, yellow through 80%, orange through 90%, red above that.
+For API, percent used is remaining prepaid mapped against a $50 full wallet
+(green above $25, yellow through $10, orange through $5, red under $5).
+
+Click a Grok chip for a popup with:
+
+- Plan name and account email, when the session and billing payload include them
+- The icon's CLI home, as you wrote it
+- **Shared weekly pool** when the account is on unified billing
+- Usage bar (0–100, colored like the ring) and percent
+- Weekly or monthly reset time
+- Weekly pace, unless you turned it off
+- How long ago usage was fetched
+- Live Grok CLI session count for that icon's CLI home (`active_sessions.json`,
+  checked against `/proc`)
+- **Sign in** or **Sign out** for that icon only
+- **Open usage**, which opens [grok.com usage](https://grok.com/?_s=usage)
+- **Copy**, which copies the percent shown
+- **Settings**
+
+| Chip | Meaning |
+|------|---------|
+| `…` | Fetching, or a sign-in is in progress |
+| `—` | Not signed in, or the session has expired |
+| `?` | Request failed, the accounts file could not be read, or there is no previous reading |
+| dimmed percent | Last good reading is still shown; the latest poll failed |
+
+On Grok API Monitor, `—` means the Management API key is missing or rejected.
+
+## How a reading is produced
+
+![Diagram from the accounts list to one percent per chip](docs/data-flow.svg)
+
+```mermaid
+flowchart LR
+    accounts["accounts list"] --> icon["One icon per entry, config order"]
+    icon --> home["That icon's CLI home"]
+    home --> session["auth.json, one bearer"]
+    session --> billing["creditUsagePercent"]
+    billing --> chip["One percent on that chip"]
+    build["Grok Build"] --> pool["Shared weekly pool"]
+    bot["Grok Bot"] --> pool
+    pool --> billing
+    api["Grok API Monitor"] --> prepaid["Prepaid dollars, separate applet"]
+```
+
+The percent is `creditUsagePercent` from
 `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`. On a unified
 plan that number is the shared weekly pool (Build, Bot, Chat, and the other
 Grok products). `productUsage` rows are a breakdown of the same pool. They are
 not added to the headline, and the old Grok Bot ledger is not added either.
-One home with several session entries still produces one chip: the chip count
-comes from config.
+
+One home with several session entries still produces one chip. The applet
+prefers one unexpired `https://auth.x.ai::` entry. The chip count comes from
+config.
 
 If the headline percent is missing on a unified plan, the chip does not invent
 a total by summing product rows. A legacy plan that is not unified still uses
 the Grok Build row only, when that is all the payload has.
 
-Prepaid API credit is a separate applet. It is not mixed into these weekly chips.
+The bearer is sent only to `https://cli-chat-proxy.grok.com` (`/v1/billing`
+and `/v1/settings`). Tokens, device codes, and account ids are not written to
+the log. The panel label is not written to the log either.
 
-## Retired Grok Bot Monitor
+## Weekly pace
 
-`cosmic-ext-applet-grok-monitor --product=bot` no longer fetches usage. If the
-old applet is still on the panel it shows a removal note instead of a second
-meter. Remove it with the steps in **Update on Pop!_OS COSMIC**.
-
-Grok Monitor does not read Grok Bot profile directories to decide which icons
-to show. It does not call `api2.cursor.sh`.
-
-### Weekly pace
-
-The shared pool is weekly on current plans. The popup adds a short line about when the
-remaining quota hits zero if the current burn continues:
+On a weekly window the popup adds a line about when the remaining quota hits
+zero if the current burn continues. The sentences below are the wording the
+applet uses. The numbers are examples of that wording, not a measurement from
+a real account.
 
 - `Will run out in 2d 4h` when that time is **before** the next reset
 - `Won't run out before reset · ~60% left at reset` when the quota lasts the week
@@ -325,41 +413,39 @@ remaining quota hits zero if the current burn continues:
 
 The burn rate is **constant from the period start**: used percent divided by
 how long the period has been open. Time to exhaustion is the remaining percent
-divided by that rate. The payload has no separate “since the last poll” rate,
-so this is the rate the applet can actually support. `~N% left` is the unused
-percent at reset under that same burn (`100 − used% / elapsed fraction`). A
-reading that is exactly even (`used %` equals elapsed % of the week) lands on
-`~0% left at reset`. An 80% used reading halfway through the week runs out in
-about 21 hours, not at reset.
+divided by that rate. The payload has no separate “since the last poll” rate.
+`~N% left` is the unused percent at reset under that same burn
+(`100 − used% / elapsed fraction`). A reading that is exactly even (`used %`
+equals elapsed % of the week) lands on `~0% left at reset`. An 80% used
+reading halfway through the week runs out in about 21 hours, not at reset.
 
-The line does not call a hot burn “on track.” The popup already has a separate
-reset countdown, so the pace line leads with exhaustion time when credits will
-not last the week.
+The line does not call a hot burn “on track.” The popup already has a reset
+countdown, so the pace line leads with exhaustion time when credits will not
+last the week.
 
 The first ~1% of the week (and any moment before the period opens) shows
-`Week just started` unless usage is already at least 5%. That avoids a huge or
-jumpy ETA from a tiny sample. A fast start that has already used 5% or more
-still reports `Will run out in …`.
+`Week just started` unless usage is already at least 5%. A fast start that has
+already used 5% or more still reports `Will run out in …`.
 
 Pace uses `currentPeriod.start` → `end` from the billing payload when present.
-Pace is hidden when there is no reset time, or when the window is not weekly
-(monthly/daily). API prepaid has no weekly quota window, so that applet has no
-pace line. Settings can hide the line; it is on by default.
+Otherwise the start is seven days before the reset. Pace is hidden when there
+is no reset time, or when the window is not weekly (monthly or daily). API
+prepaid has no weekly quota window, so that applet has no pace line.
 
 ## Grok API Monitor
 
-The other applet, launched as `cosmic-ext-applet-grok-monitor --product=api`.
-It is independent: separate panel chip, settings, and credentials. Prepaid
-monitoring is unchanged.
+Launch it as `cosmic-ext-applet-grok-monitor --product=api`, or add **Grok API
+Monitor** to the panel. It has its own chip, settings, and credentials.
 
 The chip shows remaining **prepaid API dollars** (the same remaining-credit
 figure as [console.x.ai](https://console.x.ai) billing). Click for optional
 spend this billing period, up to three API key names on the team, and
 **Open console**.
 
-Auth is a **Management API key**, not an inference API token. Create one in the
-xAI Console under **Settings → Management Keys** with billing read access, then
-write it to `~/.config/grok-mon-api/credentials.json` (`chmod 600` recommended):
+Auth is a **Management API key**, not an inference API token. Create one in
+the xAI Console under **Settings → Management Keys** with billing read access,
+then write it to `~/.config/grok-mon-api/credentials.json` (`chmod 600`
+recommended):
 
 ```json
 {
@@ -371,118 +457,92 @@ write it to `~/.config/grok-mon-api/credentials.json` (`chmod 600` recommended):
 `team_id` is optional for a team-scoped key (the applet reads it from key
 validation). Organization-scoped keys need `team_id` or `XAI_TEAM_ID`.
 Environment variables `XAI_MANAGEMENT_API_KEY` (or `XAI_MANAGEMENT_KEY`) and
-`XAI_TEAM_ID` override the file when the panel process has them.
+`XAI_TEAM_ID` override the file when the panel process has them. The applet
+does not write that file. Inference keys (`XAI_API_KEY`) are rejected.
 
-The applet computes live remaining as the lower of two figures when both
-exist: the posted prepaid ledger
-(`/v1/billing/teams/{team}/prepaid/balance`) minus current-period spend, and
-the invoice preview's `prepaidCredits`
-(`/v1/billing/teams/{team}/postpaid/invoice/preview`). Spend is the largest
-of `prepaidCreditsUsed`, `totalWithCorr`, and invoice line amounts. Mid-cycle,
+Live remaining is the lower of two figures when both exist: the posted prepaid
+ledger (`/v1/billing/teams/{team}/prepaid/balance`) minus current-period spend,
+and the invoice preview's `prepaidCredits`
+(`/v1/billing/teams/{team}/postpaid/invoice/preview`). Spend is the largest of
+`prepaidCreditsUsed`, `totalWithCorr`, and invoice line amounts. Mid-cycle,
 preview `prepaidCredits` can lag live spend, so posted minus spend is lower.
-At a billing-cycle change the previous invoice may not be posted to the
-ledger yet, while preview `prepaidCredits` already includes that spend and
+At a billing-cycle change the previous invoice may not be posted to the ledger
+yet, while preview `prepaidCredits` already includes that spend and
 `prepaidCreditsUsed` is still zero, so the preview figure is lower. When the
 ledger is missing, preview remaining is the fallback. Ledger amounts are
-inverted USD cents (`"-1000"` is $10 remaining). The applet never treats a
-missing total as $0.00.
+inverted USD cents (`"-1000"` is $10 remaining). A missing total is never
+treated as $0.00.
 
-If you see `—`, the Management API key is missing or rejected. Inference keys
-(`XAI_API_KEY`) are not accepted.
+The Management API key is sent only to `https://management-api.x.ai`.
 
-## Settings
+## Troubleshooting
 
-Open the popup and choose **Settings**.
+### The popup says the grok CLI was not found
 
-| Setting | Options | Default |
-|---------|---------|---------|
-| Poll interval | 30s, 60s, 5m | 60s |
-| Sparkline on panel | on / off | off |
-| Percent on panel | on / off | on |
-| Amount on panel (API) | on / off | on |
-| Pace in popup (Grok) | on / off | on |
-| Panel label | text | `Grok (sim sys)`, `Grok (pers)`, or the API key name |
-| Panel number | used / remaining | used |
+The panel's `PATH` often does not include `~/.grok/bin` or nvm. Read the list
+of places in the popup. Either install `grok` in one of those places, or set
+`grok_path` to the executable. The next **Sign in** uses the new path. You do
+not need to restart the panel for that.
 
-The ring fill matches the panel number (used or remaining). Color is always
-based on percent used: green through 50%, yellow through 80%, orange through
-90%, red above that, with a distinct shade at each whole percent. Settings are
-stored in COSMIC config under app id
-`io.github.simple-systems-se.grok-mon` (Grok) or
-`io.github.simple-systems-se.grok-mon-api` (API).
-The accounts list is the `accounts` key documented above. The retired Bot id
-`io.github.simple-systems-se.grok-mon-bot` is left on disk. It is not used to
-choose Grok Monitor icons.
+A file that exists but is not executable is skipped. `chmod +x` the binary, or
+point `grok_path` at the real file rather than a directory.
 
-API has no used/remaining toggle: the chip is remaining dollars. The ring is
-full at $50 remaining.
+### The chip shows `—` (session expired or signed out)
 
-## Authentication
+Open that icon and choose **Sign in**. Finish the code in an Incognito window.
+**Sign out** on the other icon first if you attached the wrong account.
 
-Each Grok Monitor icon reads the session in its own CLI home. The default
-homes are `~/.grok` and `~/.grok-personal`. The session file in that home is
-`auth.json`. The applet does not read `GROK_HOME` from its own environment.
-It prefers one unexpired `https://auth.x.ai::` entry. Extra entries in the
-same file do not become extra icons. The bearer is sent only to the Grok CLI
-billing and settings endpoints.
+On Grok API Monitor, `—` means the Management API key is missing or rejected.
+An inference key will not work. Check
+`~/.config/grok-mon-api/credentials.json` and `XAI_MANAGEMENT_API_KEY`.
 
-**Sign in** runs `grok login --device-code` (`--device-code` is the alias of
-`--device-auth` in the current Grok CLI). **Sign out** runs `grok logout`.
-Both use the `grok` binary from `grok_path` or the search above. They set
-`GROK_HOME` on that child process to the expanded CLI home for the icon and
-clear `GROK_CREDENTIALS_FILE` on the child so another home cannot redirect the
-session. The panel process keeps its own `PATH` and `GROK_HOME`. A plain
-`grok login` or `grok login --oauth` is not used, because that flow opens the
-system browser.
+### The chip shows `?`
 
-Grok API Monitor reads a Management API key from
-`~/.config/grok-mon-api/credentials.json` and/or `XAI_MANAGEMENT_API_KEY`
-(`XAI_MANAGEMENT_KEY`) plus optional `XAI_TEAM_ID`. It does not write that
-file. Inference keys are rejected.
+The last request failed, or the accounts file is not valid RON. Open the chip.
+The popup includes the error, or it names the accounts file when that file
+could not be parsed. A dimmed percent means an older reading is still on the
+chip and only the latest poll failed.
 
-The applet does not write session files itself. `grok login` and `grok logout`
-do, inside the icon's CLI home.
+### There are no chips
 
-## Privacy
+An accounts file of `[]` shows nothing. That is intentional. Delete the file
+to restore the two defaults, or add entries. A file that is not valid RON also
+shows no account chips; it shows one `?` chip whose popup is the config error.
 
-Grok Monitor:
+A missing accounts file is not the empty state. Missing means the two default
+icons.
 
-- Reads the session file and `active_sessions.json` in each configured CLI home.
-- Sends that home's bearer only to `https://cli-chat-proxy.grok.com`
-  (`/v1/billing`, `/v1/settings`).
-- Starts `grok login --device-code` or `grok logout` with `GROK_HOME` set to
-  that icon's CLI home. The device-code URL and user code are shown in the
-  popup. They are not written to the log.
+### Sign-in attached the account that was already in the browser
 
-Grok Monitor does not read Grok Bot profile files to build the icon list.
-The retired Grok Bot Monitor slot does not poll.
+That happens when the device-code page is opened in a normal window. Sign out
+from the affected icon, then sign in again and open the URL in Incognito.
 
-Grok API Monitor:
+### The applet does not appear after install
 
-- Reads `~/.config/grok-mon-api/credentials.json` and the
-  `XAI_MANAGEMENT_API_KEY` / `XAI_MANAGEMENT_KEY` / `XAI_TEAM_ID` environment
-  variables when present.
-- Sends the Management API key only to `https://management-api.x.ai`
-  (`/auth/management-keys/validation`, `/v1/billing/teams/{team}/prepaid/balance`,
-  `/v1/billing/teams/{team}/postpaid/invoice/preview`,
-  `/auth/teams/{team}/api-keys`).
+Restart the panel, then add it in Settings:
 
-None of the applets:
+```sh
+pkill -x cosmic-panel
+```
 
-- Writes session files or API keys itself. Grok Monitor sign-in and sign-out
-  ask the Grok CLI to update the selected CLI home.
-- Logs tokens. The Authorization header is marked sensitive so HTTP debug
-  traces redact it. In-memory secrets are zeroized when dropped.
+Log out and back in if the desktop files were installed while COSMIC was not
+looking at `~/.local/share/applications`.
+
+### Grok Bot Monitor is still on the panel
+
+Remove it in **COSMIC Settings → Desktop → Panel → Applets**. Clicking it
+shows a removal note. It does not fetch usage and it does not open Grok Bot
+profile directories.
 
 ## Uninstall
 
-If you installed the `.deb`:
+Debian package:
 
 ```sh
 sudo apt remove cosmic-ext-applet-grok-monitor
 ```
 
-If you installed with `just install-user`:
+User install:
 
 ```sh
 just uninstall-user
@@ -506,9 +566,8 @@ rm -f ~/.local/bin/cosmic-ext-applet-grok-monitor \
   ~/.local/share/metainfo/io.github.simple-systems-se.grok-mon-api.metainfo.xml
 ```
 
-Then remove **Grok Monitor**, **Grok Bot Monitor**, and **Grok API Monitor** from
-the panel if they are still listed
-(**COSMIC Settings → Desktop → Panel → Applets**).
+Then remove **Grok Monitor**, **Grok Bot Monitor**, and **Grok API Monitor**
+from the panel if they are still listed.
 
 Settings stay in COSMIC config until you purge them:
 
@@ -524,32 +583,77 @@ That also removes:
 ~/.config/cosmic/io.github.simple-systems-se.grok-mon-api/
 ```
 
-It does not delete `~/.config/grok-mon-api/credentials.json`.
+It does not delete `~/.config/grok-mon-api/credentials.json`, `~/.grok`, or
+`~/.grok-personal`.
 
 ## Development
+
+From a git checkout, with the system packages in
+[Requirements](#requirements):
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cargo build --release --locked
+bash scripts/package-linux.sh
+```
+
+`scripts/package-linux.sh` does not compile. It packs `target/release` into
+`dist/*.deb` and `dist/*.tar.gz`, then writes `dist/SHA256SUMS`. `just package-linux`
+builds with `--locked` and then runs that script. `VERSION=1.2.3 just package-linux`
+overrides the package version (a leading `v` is stripped). The default version
+is `version` in `Cargo.toml`.
+
+`just` equivalents:
 
 ```sh
 just test
 just check
+just fmt
 just build-release
 just package-linux
 just run
 just run -- --product=api
 ```
 
-Tagged `v*` pushes run `.github/workflows/release.yml` on `ubuntu-24.04`
-and attach a `.deb` plus binary tarball to a GitHub Release. Use
-**Actions → Release → Run workflow** to build artifacts without publishing.
+`just check` is clippy with `-D warnings`. `just fmt` rewrites sources.
+`just run` sets `RUST_LOG=cosmic_ext_applet_grok_monitor=info`.
 
-Or with Cargo:
+Tagged `v*` pushes run `.github/workflows/release.yml` on `ubuntu-24.04` and
+attach a `.deb` plus binary tarball to a GitHub Release. **Actions → Release →
+Run workflow** builds those artifacts without publishing. This tree does not
+tag or publish on its own.
+
+Run the API applet from Cargo:
 
 ```sh
-cargo test
-cargo clippy --all-targets -- -D warnings
-cargo build --release
-RUST_LOG=cosmic_ext_applet_grok_monitor=info cargo run --release
 RUST_LOG=cosmic_ext_applet_grok_monitor=info cargo run --release -- --product=api
 ```
+
+The retired slot is `--product=bot`.
+
+## Privacy
+
+Grok Monitor reads `auth.json` and `active_sessions.json` in each configured
+CLI home. It sends that home's bearer only to
+`https://cli-chat-proxy.grok.com`. It starts `grok login --device-code` or
+`grok logout` with `GROK_HOME` set on that child. The device-code URL and user
+code are shown in the popup and are not written to the log.
+
+Grok Monitor does not read Grok Bot profile files to build the icon list. The
+retired slot does not poll and does not open those directories.
+
+Grok API Monitor reads `~/.config/grok-mon-api/credentials.json` and the
+`XAI_MANAGEMENT_API_KEY` / `XAI_MANAGEMENT_KEY` / `XAI_TEAM_ID` environment
+variables when present. It sends the Management API key only to
+`https://management-api.x.ai`.
+
+None of the applets write session files or API keys themselves. The
+Authorization header is marked sensitive so HTTP debug traces redact it.
+In-memory secrets are zeroized when dropped. See [SECURITY.md](SECURITY.md)
+for how to report a vulnerability. Do not attach `auth.json`, credentials, or
+tokens.
 
 ## License
 

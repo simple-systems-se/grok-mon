@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.3
+
+- When the access token in a chip's CLI home is within 5 minutes of
+  `expires_at`, or already past it, the applet runs `grok models` once for
+  that home so the CLI can refresh the session. The child is not a TTY,
+  `GROK_HOME` is set only on that child, and the run is stopped after 60
+  seconds. It is not `grok login` or `grok logout`.
+- The applet re-reads `auth.json` after that command. A failure waits before
+  the next try (5 minutes, doubling, capped at 6 hours) so a poll does not
+  spawn `grok` in a loop. If the session is still expired, the chip stays on
+  `—` and the popup keeps Sign in.
+- Logs for that attempt name the chip index and the CLI home, and say whether
+  it succeeded or failed (exit code or timeout). They do not include tokens
+  or email addresses.
+
 ## 0.4.2
 
 - The panel chip no longer stays on `…` after a successful device-code sign-in

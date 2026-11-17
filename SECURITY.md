@@ -3,8 +3,10 @@
 Grok Monitor reads the session in each configured CLI home and sends that
 bearer only to `https://cli-chat-proxy.grok.com`. The default homes are
 `~/.grok` and `~/.grok-personal`. The panel process does not take `GROK_HOME`
-from its own environment. Sign-in and sign-out run `grok` with `GROK_HOME`
-set on that child only.
+from its own environment. Sign-in, sign-out, and a quiet session refresh run
+`grok` with `GROK_HOME` set on that child only. The refresh command is
+`grok models`, used when that home's access token is near `expires_at` or
+already past it. It is not `grok login`.
 
 The device-code URL and user code are shown in the icon popup so the sign-in
 can be finished in an Incognito window. They are not written to logs. The
@@ -18,9 +20,13 @@ Management API key from `~/.config/grok-mon-api/credentials.json` and/or
 That prepaid path is separate from the weekly usage chips.
 
 The applet does not write session files itself. `grok login --device-code`
-and `grok logout` write or clear the session in the selected CLI home. Tokens
-are not logged. The Authorization header is marked sensitive so HTTP debug
-traces redact it. In-memory secrets are zeroized when dropped.
+and `grok logout` write or clear the session in the selected CLI home.
+`grok models` is the command the CLI uses to refresh an access token; the
+applet runs it only for the home that is near expiry, discards its output,
+and stops it after 60 seconds. A failed refresh backs off so the panel does
+not spawn `grok` on every poll. Tokens and email addresses are not logged.
+The Authorization header is marked sensitive so HTTP debug traces redact it.
+In-memory secrets are zeroized when dropped.
 
 ## Reporting a vulnerability
 

@@ -27,6 +27,14 @@
     <content_attribute id="social-info">mild</content_attribute>
   </content_rating>
   <releases>
+    <release version="0.4.3" date="2026-11-17">
+      <description>
+        <p>
+          Still retired. Opening this slot shows the removal note only. It
+          does not read Grok Bot profiles or refresh Grok CLI sessions.
+        </p>
+      </description>
+    </release>
     <release version="0.4.2" date="2026-11-16">
       <description>
         <p>

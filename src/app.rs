@@ -8,9 +8,10 @@ use crate::chip::{self, PanelChip, panel_chip, usage_bar};
 use crate::config::{self, ACCOUNTS_CONFIG_PATH, APP_ID, Config, USAGE_URL};
 use crate::login::{self, LoginPhase, LoginUiState, LoginUpdate};
 use crate::pace::maybe_weekly_pace;
+use crate::renew::{self, RenewResult};
 use crate::ring::{RingIcon, usage_color, usage_ring};
 use crate::sessions::{LiveSessions, live_sessions_at};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use cosmic::app::Core;
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::alignment::{Horizontal, Vertical};
@@ -27,6 +28,8 @@ use std::sync::LazyLock;
 static PANEL_ID: LazyLock<widget::Id> = LazyLock::new(|| widget::Id::new("grok-monitor-panel"));
 
 const HISTORY_LEN: usize = 24;
+/// One quiet `grok models` run plus the billing request.
+const FETCH_STALL: std::time::Duration = std::time::Duration::from_secs(90);
 const CONFIG_ERROR_ID: &str = "config-error";
 const UNREADABLE_ACCOUNTS: &str =
     "Could not read the accounts list. Fix the accounts file. Icons are not being guessed.";
@@ -48,6 +51,7 @@ struct AccountChip {
     error: Option<FetchError>,
     history: VecDeque<f32>,
     login: LoginUiState,
+    renew: renew::BackoffState,
 }
 
 impl Default for AccountChip {
@@ -63,6 +67,7 @@ impl Default for AccountChip {
             error: None,
             history: VecDeque::new(),
             login: LoginUiState::default(),
+            renew: renew::BackoffState::default(),
         }
     }
 }
@@ -108,6 +113,12 @@ impl Default for GrokMonitor {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct PollDone {
+    reports: Vec<renew::RenewReport>,
+    usage: Vec<IconUsage>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Message {
     Tick,
     Clock,
@@ -115,7 +126,7 @@ pub enum Message {
     TogglePopup(String),
     PopupClosed(Id),
     Size(Size),
-    UsageFetched(u64, Vec<IconUsage>),
+    UsageFetched(u64, PollDone),
     OpenUsage,
     CopyPercent,
     CopyText(String),
@@ -224,11 +235,12 @@ impl cosmic::Application for GrokMonitor {
                 self.refresh_sessions();
             }
             Message::LoginPoll => return self.poll_logins(),
-            Message::UsageFetched(generation, results) => {
+            Message::UsageFetched(generation, done) => {
                 if generation == self.fetch_generation {
                     self.fetching = false;
                     self.fetch_started = None;
-                    self.apply_usage(results);
+                    self.apply_renewals(&done.reports);
+                    self.apply_usage(done.usage);
                 }
             }
             Message::TogglePopup(account_id) => {
@@ -432,14 +444,15 @@ impl GrokMonitor {
         if self.fetching && !force {
             if self
                 .fetch_started
-                .is_some_and(|started| started.elapsed() > std::time::Duration::from_secs(30))
+                .is_some_and(|started| started.elapsed() > FETCH_STALL)
             {
-                tracing::warn!("usage fetch still running after 30s; retrying");
+                tracing::warn!("usage fetch still running after 90s; retrying");
                 self.fetching = false;
             } else {
                 return Task::none();
             }
         }
+        let renew = !self.fetching;
         let targets: Vec<IconTarget> = self
             .accounts
             .iter()
@@ -455,13 +468,63 @@ impl GrokMonitor {
             self.fetch_started = None;
             return Task::none();
         }
+        let renewals = if renew {
+            self.renewal_jobs(Utc::now())
+        } else {
+            Vec::new()
+        };
         self.fetching = true;
         self.fetch_generation = self.fetch_generation.wrapping_add(1);
         self.fetch_started = Some(std::time::Instant::now());
         let generation = self.fetch_generation;
-        Task::perform(fetch_configured_usage(targets), move |results| {
-            cosmic::action::Action::App(Message::UsageFetched(generation, results))
+        Task::perform(poll_usage(renewals, targets), move |done| {
+            cosmic::action::Action::App(Message::UsageFetched(generation, done))
         })
+    }
+
+    fn renewal_jobs(&self, now: DateTime<Utc>) -> Vec<renew::RenewJob> {
+        let inputs: Vec<renew::RenewInput> = self
+            .accounts
+            .iter()
+            .map(|chip| {
+                let busy = chip.home_error.is_some()
+                    || chip.login.is_in_progress()
+                    || chip.login.phase == LoginPhase::Succeeded;
+                let due =
+                    chip.home_error.is_none() && renew::session_needs_renewal(&chip.cli_home, now);
+                renew::RenewInput {
+                    home_key: chip.cli_home.clone(),
+                    busy,
+                    due,
+                    backoff: chip.renew.clone(),
+                }
+            })
+            .collect();
+        let grok_path = self.config.grok_path.clone();
+        renew::renewal_indexes(&inputs, now)
+            .into_iter()
+            .map(|index| renew::RenewJob {
+                index: self.accounts[index].index,
+                home: self.accounts[index].cli_home.clone(),
+                grok_path: grok_path.clone(),
+            })
+            .collect()
+    }
+
+    fn apply_renewals(&mut self, reports: &[renew::RenewReport]) {
+        let now = Utc::now();
+        for report in reports {
+            renew::log_renewal(report.index, &report.home, &report.result);
+            for chip in &mut self.accounts {
+                if chip.cli_home != report.home {
+                    continue;
+                }
+                match &report.result {
+                    RenewResult::Renewed => chip.renew.note_success(),
+                    RenewResult::Failed { .. } => chip.renew.note_failure(now),
+                }
+            }
+        }
     }
 
     fn apply_usage(&mut self, results: Vec<IconUsage>) {
@@ -998,6 +1061,9 @@ impl GrokMonitor {
 
 fn apply_icon(chip: &mut AccountChip, icon: ResolvedIcon) {
     let was_config = matches!(chip.error, Some(FetchError::Config(_)));
+    if chip.cli_home != icon.cli_home {
+        chip.renew = renew::BackoffState::default();
+    }
     chip.index = icon.index;
     chip.id = icon.id;
     chip.label = icon.panel_label;
@@ -1147,6 +1213,12 @@ fn poll_button<'a>(secs: u64, current: u64) -> Element<'a, Message> {
 
 fn padded<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     cosmic::applet::padded_control(content).into()
+}
+
+async fn poll_usage(renewals: Vec<renew::RenewJob>, targets: Vec<IconTarget>) -> PollDone {
+    let reports = renew::renew_all(renewals).await;
+    let usage = fetch_configured_usage(targets).await;
+    PollDone { reports, usage }
 }
 
 #[cfg(test)]

@@ -9,6 +9,7 @@ mod config;
 mod grok_cli;
 mod login;
 mod pace;
+mod renew;
 mod ring;
 mod sessions;
 mod spawn;

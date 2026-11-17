@@ -304,6 +304,47 @@ sequenceDiagram
 Do not run `grok login` or `grok logout` in a terminal for these icons. The
 shell's `GROK_HOME` may be a different account.
 
+### Session refresh
+
+`auth.json` is a map of scope to credential. For the one session a chip uses,
+the applet reads `key`, `expires_at`, `email`, and `principal_type`. It does
+not read or write `refresh_token`. The CLI keeps that refresh token and, when
+the CLI runs, replaces the access token and writes a new `expires_at`.
+
+The access token's `expires_at` is often well under a day. Grok Monitor used
+to read that timestamp and show **session expired** as soon as it passed,
+including for an account that was still signed in. The CLI would have renewed
+the token the next time it ran. An icon that is not used in a terminal never
+got that run.
+
+When the session this chip would use is within 5 minutes of `expires_at`, or
+already past it, the applet runs `grok models` once for that icon's CLI home,
+then reads `auth.json` again and fetches usage. Five minutes is the CLI's
+default early-refresh window. `grok models` is an unattended command: it
+lists models and boots the CLI's own locked refresh. The applet does not
+attach a terminal, so this run cannot prompt. `grok usage` is not used. That
+command prints saved per-session cost and does not refresh the login.
+
+The child is not a TTY. Its standard input, output, and error are discarded.
+`GROK_HOME` on that child is this icon's home, and `GROK_CREDENTIALS_FILE` is
+removed from the child. The panel process environment is not changed. The
+arguments are `models` only: not `login`, not `logout`, and not
+`--device-code`. The same `grok` binary search as sign-in is used. The child
+is stopped if it is still running after 60 seconds.
+
+A failure waits before the next try for that CLI home: 5 minutes, then 10,
+20, 40, and so on, up to 6 hours. The wait is kept in memory and clears after
+a refresh that leaves a session outside the 5-minute window. Two icons that
+share a home share one try. A sign-in or sign-out that is already running for
+that home is left alone. There is no settings key for this. It is always on.
+
+The log line names the chip index and the CLI home path, and says that a
+renewal was attempted, succeeded, or failed, with the exit code or timeout.
+It does not include a token or an email address.
+
+If the command does not leave a usable session, the chip stays on `—` and the
+popup keeps **Sign in**.
+
 The `grok` binary is resolved once per launch, in this order. The search does
 not change the panel's `PATH` or `HOME`:
 
@@ -394,9 +435,14 @@ If the headline percent is missing on a unified plan, the chip does not invent
 a total by summing product rows. A legacy plan that is not unified still uses
 the Grok Build row only, when that is all the payload has.
 
+Before that fetch, a session that is within 5 minutes of `expires_at` or
+already past it is handed to `grok models` for that home, as described in
+[Session refresh](#session-refresh). The applet then reads `auth.json` again.
+
 The bearer is sent only to `https://cli-chat-proxy.grok.com` (`/v1/billing`
 and `/v1/settings`). Tokens, device codes, and account ids are not written to
-the log. The panel label is not written to the log either.
+the log. The panel label is not written to the log either. A renewal log
+names the chip index and the CLI home only.
 
 ## Weekly pace
 
@@ -481,16 +527,29 @@ The Management API key is sent only to `https://management-api.x.ai`.
 
 The panel's `PATH` often does not include `~/.grok/bin` or nvm. Read the list
 of places in the popup. Either install `grok` in one of those places, or set
-`grok_path` to the executable. The next **Sign in** uses the new path. You do
-not need to restart the panel for that.
+`grok_path` to the executable. The next **Sign in**, and the quiet `grok models` refresh, use the new path.
+You do not need to restart the panel for that.
 
 A file that exists but is not executable is skipped. `chmod +x` the binary, or
 point `grok_path` at the real file rather than a directory.
 
 ### The chip shows `—` (session expired or signed out)
 
-Open that icon and choose **Sign in**. Finish the code in an Incognito window.
-**Sign out** on the other icon first if you attached the wrong account.
+The applet first tries `grok models` for that icon's home when the access
+token is within 5 minutes of expiry or already expired. If that refresh
+works, the next reading replaces `—`. A normal access-token expiry does not
+need another sign-in.
+
+**Sign in** remains when that home has no session, the CLI rejects the refresh
+token, `grok` cannot be started, or the quiet attempt timed out and the next
+try is still waiting. Open that icon and choose **Sign in**. Finish the code
+in an Incognito window. **Sign out** on the other icon first if you attached
+the wrong account.
+
+A `—` that returns within a few minutes of a failed refresh is the backoff,
+not a new sign-out. The log line `session renewal failed` includes the chip
+index, the CLI home, and the exit code or timeout. It does not include the
+token or the email.
 
 On Grok API Monitor, `—` means the Management API key is missing or rejected.
 An inference key will not work. Check
@@ -637,9 +696,11 @@ The retired slot is `--product=bot`.
 
 Grok Monitor reads `auth.json` and `active_sessions.json` in each configured
 CLI home. It sends that home's bearer only to
-`https://cli-chat-proxy.grok.com`. It starts `grok login --device-code` or
-`grok logout` with `GROK_HOME` set on that child. The device-code URL and user
-code are shown in the popup and are not written to the log.
+`https://cli-chat-proxy.grok.com`. It starts `grok login --device-code`,
+`grok logout`, or, when that home's access token is near expiry, `grok models`.
+`GROK_HOME` is set on that child only. The device-code URL and user code are
+shown in the popup and are not written to the log. Renewal output is
+discarded. Tokens and email addresses are not written to the log.
 
 Grok Monitor does not read Grok Bot profile files to build the icon list. The
 retired slot does not poll and does not open those directories.

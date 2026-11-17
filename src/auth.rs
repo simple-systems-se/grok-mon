@@ -48,6 +48,8 @@ pub struct Bearer {
     pub id: String,
     pub token: String,
     pub identity: AuthIdentity,
+    /// Access-token expiry from `expires_at`. None when that field is absent or not a timestamp.
+    pub(crate) expires_at: Option<DateTime<Utc>>,
 }
 
 impl Drop for Bearer {
@@ -69,11 +71,37 @@ pub fn load_bearer_from(home: &Path) -> Result<Bearer, AuthError> {
 }
 
 fn primary_bearer_from_auth_json(raw: &str) -> Result<Bearer, AuthError> {
-    let mut bearers = bearers_from_auth_json(raw)?;
+    let mut bearers = bearers_from_auth_json(raw, Utc::now())?;
     bearers.drain(..).next().ok_or(AuthError::Missing)
 }
 
-fn bearers_from_auth_json(raw: &str) -> Result<Vec<Bearer>, AuthError> {
+/// True when the session this file would serve is already past `expires_at`
+/// or reaches it within `within`. A missing file, unreadable JSON, an empty
+/// key, or a live entry with no `expires_at` is not due.
+pub fn auth_json_needs_renewal(raw: &str, now: DateTime<Utc>, within: chrono::Duration) -> bool {
+    match bearers_from_auth_json(raw, now) {
+        Err(AuthError::Expired) => true,
+        Ok(bearers) => bearers
+            .first()
+            .and_then(|bearer| bearer.expires_at)
+            .is_some_and(|when| when <= now + within),
+        Err(AuthError::Missing | AuthError::Invalid) => false,
+    }
+}
+
+/// Read `auth.json` in `home` and apply [`auth_json_needs_renewal`].
+/// The raw file is zeroized. Tokens are not returned.
+pub fn session_needs_renewal(home: &Path, now: DateTime<Utc>, within: chrono::Duration) -> bool {
+    let path = home.join("auth.json");
+    let Ok(mut raw) = fs::read_to_string(&path) else {
+        return false;
+    };
+    let due = auth_json_needs_renewal(&raw, now, within);
+    raw.zeroize();
+    due
+}
+
+fn bearers_from_auth_json(raw: &str, now: DateTime<Utc>) -> Result<Vec<Bearer>, AuthError> {
     let map: HashMap<String, AuthEntry> =
         serde_json::from_str(raw).map_err(|_| AuthError::Invalid)?;
 
@@ -85,7 +113,8 @@ fn bearers_from_auth_json(raw: &str) -> Result<Vec<Bearer>, AuthError> {
         if entry.key.as_deref().is_none_or(|k| k.is_empty()) {
             continue;
         }
-        let expired = entry_expired(&entry);
+        let expires_at = parse_expiry(entry.expires_at.as_deref());
+        let expired = expires_at.is_some_and(|when| when <= now);
         let Some(token) = entry.key.take().filter(|k| !k.is_empty()) else {
             continue;
         };
@@ -96,6 +125,7 @@ fn bearers_from_auth_json(raw: &str) -> Result<Vec<Bearer>, AuthError> {
                 email: entry.email.take(),
                 principal_type: entry.principal_type.take(),
             },
+            expires_at,
         };
         if id.starts_with("https://auth.x.ai::") {
             if expired {
@@ -131,12 +161,9 @@ fn email_sort_key(email: &Option<String>) -> String {
     email.as_deref().unwrap_or("").to_ascii_lowercase()
 }
 
-fn entry_expired(entry: &AuthEntry) -> bool {
-    entry
-        .expires_at
-        .as_deref()
-        .and_then(|expires| DateTime::parse_from_rfc3339(expires).ok())
-        .is_some_and(|when| when.with_timezone(&Utc) <= Utc::now())
+fn parse_expiry(raw: Option<&str>) -> Option<DateTime<Utc>> {
+    raw.and_then(|expires| DateTime::parse_from_rfc3339(expires).ok())
+        .map(|when| when.with_timezone(&Utc))
 }
 
 #[cfg(test)]

@@ -391,6 +391,9 @@ shows two bars and nothing else:
   The label is only the compact time until reset, such as `3h 12m` or
   `2d 4h`. It does not say “resets in” or “resets at”.
 
+The two tracks are the same width. Each label sits in one fixed column, so
+`72% remaining` and `3h 12m` do not change the length of the bar.
+
 There is no plan name, email, CLI home, pace sentence, “updated … ago” line,
 or live-session line in that state. **Sign out**, **Open usage**, **Copy**,
 and **Settings** are not on that popup either. Edit the COSMIC config files
@@ -463,10 +466,10 @@ names the chip index and the CLI home only.
 ## Weekly pace
 
 `show_pace` is still loaded and saved, and Settings still has the switch.
-Version 0.4.4 does not draw a pace line. The popup's second bar is the time
-left in the current window (`reset − now`, over `reset − start`). It is not
-a burn-rate forecast, and it does not assume a 7-day week when the payload
-has no period start.
+Version 0.4.5 does not draw a pace line. The popup's second bar is the time
+left in the current window (`reset − now`, over `reset − start`) and is the
+same width as the usage bar. It is not a burn-rate forecast, and it does not
+assume a 7-day week when the payload has no period start.
 
 Grok API Monitor has no usage-window start or end, so its popup is unchanged:
 remaining prepaid dollars, optional spend, key names, and **Open console**.

@@ -1225,14 +1225,16 @@ fn usage_meters_only(
 
 /// Usage bar (percent remaining) with the time-left bar directly under it.
 ///
-/// When the window length is not in the payload, the time bar is empty
-/// (`fill_percent` is `None`). The duration label is still the time until
-/// reset. A missing reset time uses `—` and an empty bar.
+/// Both meters are `labeled_bar` in this column, so the tracks share one
+/// width. When the window length is not in the payload, the time bar is
+/// empty (`fill_percent` is `None`). The duration label is still the time
+/// until reset. A missing reset time uses `—` and an empty bar.
 fn usage_meters(snapshot: &UsageSnapshot) -> Element<'static, Message> {
     let window = reset_window(Utc::now(), snapshot.starts_at, snapshot.resets_at);
     let time_fill = window.fill_percent.unwrap_or(0.0);
     let time_color: Color = theme::active().cosmic().on_bg_color().into();
     column::with_capacity(2)
+        .width(Length::Fill)
         .spacing(10)
         .push(labeled_bar(
             remaining_percent(snapshot.percent),

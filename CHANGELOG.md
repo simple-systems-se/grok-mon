@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.5
+
+- The usage bar and the time bar in a signed-in popup are the same width.
+  The label sits in a fixed column, so a longer label (`72% remaining`,
+  `100% remaining`) does not shorten its bar relative to `3h 12m`. The same
+  layout is used when the popup is only the two bars and when an error or
+  sign-in control is also shown.
+
 ## 0.4.4
 
 - A signed-in Grok popup that has a reading shows two bars and nothing else.

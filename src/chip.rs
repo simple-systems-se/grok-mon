@@ -58,18 +58,42 @@ pub fn usage_bar<'a, Message: 'a>(fill_percent: f32, used_percent: f32) -> Eleme
         .into()
 }
 
-/// A full-width meter with its label on the right. `fill_percent` is clamped
-/// to 0..=100. A missing fraction is passed as `0.0` (empty track).
+/// Label column shared by the popup's usage bar and time bar.
+///
+/// `100% remaining` is the longest label: about 107px in the 14px body
+/// font. Time labels (`3h 12m`, `2d 4h`, `—`) are shorter. A fixed column
+/// keeps a short label from lengthening its track. Both tracks are
+/// `Length::Fill` inside a row of the same width, so they match.
+const METER_LABEL_WIDTH: f32 = 136.0;
+
+fn meter_label_length() -> Length {
+    Length::Fixed(METER_LABEL_WIDTH)
+}
+
+/// A meter with its label on the right. `fill_percent` is clamped to
+/// 0..=100. A missing fraction is passed as `0.0` (empty track).
+///
+/// The label uses the shared fixed column and the track fills the rest, so
+/// every meter from this function has the same track width.
 pub fn labeled_bar<'a, Message: 'a>(
     fill_percent: f32,
     color: Color,
     label: impl Into<String>,
 ) -> Element<'a, Message> {
     row::with_capacity(2)
+        .width(Length::Fill)
         .push(fill_track(fill_percent, color))
-        .push(text::body(label.into()))
+        .push(meter_label(label.into()))
         .align_y(Vertical::Center)
         .spacing(8)
+        .into()
+}
+
+fn meter_label<'a, Message: 'a>(label: String) -> Element<'a, Message> {
+    container(text::body(label))
+        .width(meter_label_length())
+        .align_x(Horizontal::Left)
+        .align_y(Vertical::Center)
         .into()
 }
 
@@ -227,5 +251,15 @@ mod tests {
     #[test]
     fn truncate_identity_to_zero() {
         assert_eq!(truncate_identity_to("a@b.com", 0), "");
+    }
+
+    #[test]
+    fn popup_meter_labels_share_one_fixed_column() {
+        assert_eq!(meter_label_length(), Length::Fixed(136.0));
+        let longest = crate::billing::format_remaining_percent(0.0);
+        assert_eq!(longest, "100% remaining");
+        for sample in ["72% remaining", "3h 12m", "2d 4h", "—", "0m"] {
+            assert!(sample.chars().count() < longest.chars().count());
+        }
     }
 }

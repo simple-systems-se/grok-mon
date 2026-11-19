@@ -2,12 +2,11 @@ use crate::accounts::{self, ResolvedIcon};
 use crate::auth::{self, AuthError};
 use crate::billing::{
     FetchError, IconTarget, IconUsage, UsageSnapshot, fetch_configured_usage, format_percent,
-    format_remaining, period_label,
+    format_remaining_percent, remaining_percent, reset_window,
 };
-use crate::chip::{self, PanelChip, panel_chip, usage_bar};
+use crate::chip::{self, PanelChip, labeled_bar, panel_chip};
 use crate::config::{self, ACCOUNTS_CONFIG_PATH, APP_ID, Config, USAGE_URL};
 use crate::login::{self, LoginPhase, LoginUiState, LoginUpdate};
-use crate::pace::maybe_weekly_pace;
 use crate::renew::{self, RenewResult};
 use crate::ring::{RingIcon, usage_color, usage_ring};
 use crate::sessions::{LiveSessions, live_sessions_at};
@@ -775,7 +774,6 @@ impl GrokMonitor {
     }
 
     fn overview(&self) -> Element<'_, Message> {
-        let mut col = column::with_capacity(16).padding([12, 0]).spacing(8);
         let Some(chip) = self.selected_chip() else {
             return self.empty_overview();
         };
@@ -786,60 +784,53 @@ impl GrokMonitor {
         let login = chip.login.clone();
         let home_error = chip.home_error.clone();
 
-        let title = snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.plan.clone())
-            .unwrap_or_else(|| label.clone());
-        let email = snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.email.clone())
-            .unwrap_or_default();
-        let mut heading = column::with_capacity(4).push(text::title4(title));
-        if !email.is_empty() {
-            heading = heading.push(text::caption(email));
+        if let Some(snapshot) = snapshot.as_ref() {
+            return self.usage_popup(snapshot, &error, &login, home_error.as_deref());
         }
+
+        let mut col = column::with_capacity(12).padding([12, 0]).spacing(8);
+        let mut heading = column::with_capacity(2).push(text::title4(label));
         if !home_display.is_empty() {
             heading = heading.push(text::caption(format!("CLI home: {home_display}")));
         }
-        if snapshot.as_ref().is_some_and(|snapshot| snapshot.unified) {
-            heading = heading.push(text::caption("Shared weekly pool"));
-        }
         col = col.push(padded(heading));
         col = col.push(padded(divider::horizontal::default()));
+        col = col.push(self.status_block(&error, &login, home_error.as_deref(), false));
+        col.into()
+    }
 
-        if let Some(snapshot) = snapshot.as_ref() {
-            let shown = self.config.display_percent(snapshot.percent);
-            col = col.push(padded(usage_bar(shown, snapshot.percent)));
-            let mut detail = format!(
-                "{} · {}",
-                period_label(snapshot.period_type.as_deref()),
-                format_percent(shown)
-            );
-            if self.config.show_remaining {
-                detail.push_str(" remaining");
-            }
-            if let (Some(used), Some(limit)) = (snapshot.used, snapshot.limit) {
-                detail = format!("{detail}  ({used:.0} / {limit:.0})");
-            }
-            col = col.push(padded(text::body(detail)));
-            if let Some(end) = snapshot.resets_at {
-                col = col.push(padded(text::caption(format_remaining(end))));
-            }
-            if self.config.show_pace
-                && let Some(pace) = maybe_weekly_pace(
-                    snapshot.percent,
-                    Utc::now(),
-                    snapshot.starts_at,
-                    snapshot.resets_at,
-                    snapshot.period_type.as_deref(),
-                )
-            {
-                col = col.push(padded(text::caption(pace.popup_line())));
-            }
-            let age = (Utc::now() - snapshot.fetched_at).num_seconds().max(0);
-            col = col.push(padded(text::caption(format!("updated {age}s ago"))));
+    /// Signed-in reading: the remaining bar and the time-left bar. Status
+    /// text and the sign-in controls stay only when this icon still needs
+    /// an action (error, sign-in, sign-out).
+    fn usage_popup(
+        &self,
+        snapshot: &UsageSnapshot,
+        error: &Option<FetchError>,
+        login: &LoginUiState,
+        home_error: Option<&str>,
+    ) -> Element<'_, Message> {
+        let mut col = column::with_capacity(4).padding([12, 0]).spacing(8);
+        col = col.push(padded(usage_meters(snapshot)));
+        if usage_meters_only(
+            login,
+            error.as_ref(),
+            home_error,
+            self.open_error.as_deref(),
+        ) {
+            return col.into();
         }
+        col = col.push(self.status_block(error, login, home_error, true));
+        col.into()
+    }
 
+    fn status_block(
+        &self,
+        error: &Option<FetchError>,
+        login: &LoginUiState,
+        home_error: Option<&str>,
+        signed_in: bool,
+    ) -> Element<'_, Message> {
+        let mut col = column::with_capacity(8).spacing(8);
         if home_error.is_none()
             && let Some(error) = error.as_ref().filter(|_| {
                 !matches!(
@@ -856,11 +847,11 @@ impl GrokMonitor {
             col = col.push(padded(text::caption(error).class(destructive_text())));
         }
 
-        col = col.push(padded(self.login_controls(
-            &login,
-            home_error.as_deref(),
-            snapshot.is_some(),
-        )));
+        col = col.push(padded(self.login_controls(login, home_error, signed_in)));
+
+        if signed_in {
+            return col.into();
+        }
 
         let session_line = if self.live.count == 0 {
             "no live sessions".to_string()
@@ -1007,6 +998,9 @@ impl GrokMonitor {
         col = col.push(padded(settings::item(
             "Pace in popup",
             widget::toggler(self.config.show_pace).on_toggle(Message::TogglePace),
+        )));
+        col = col.push(padded(text::caption(
+            "This switch is still saved. The popup shows the time-remaining bar.",
         )));
         col = col.push(padded(self.label_setting()));
         col = col.push(padded(text::body("Panel number")));
@@ -1213,6 +1207,40 @@ fn poll_button<'a>(secs: u64, current: u64) -> Element<'a, Message> {
 
 fn padded<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     cosmic::applet::padded_control(content).into()
+}
+
+/// True when the popup should be the two bars and nothing else.
+fn usage_meters_only(
+    login: &LoginUiState,
+    error: Option<&FetchError>,
+    home_error: Option<&str>,
+    open_error: Option<&str>,
+) -> bool {
+    home_error.is_none()
+        && error.is_none()
+        && open_error.is_none()
+        && login.message.is_empty()
+        && login.phase == LoginPhase::Idle
+}
+
+/// Usage bar (percent remaining) with the time-left bar directly under it.
+///
+/// When the window length is not in the payload, the time bar is empty
+/// (`fill_percent` is `None`). The duration label is still the time until
+/// reset. A missing reset time uses `—` and an empty bar.
+fn usage_meters(snapshot: &UsageSnapshot) -> Element<'static, Message> {
+    let window = reset_window(Utc::now(), snapshot.starts_at, snapshot.resets_at);
+    let time_fill = window.fill_percent.unwrap_or(0.0);
+    let time_color: Color = theme::active().cosmic().on_bg_color().into();
+    column::with_capacity(2)
+        .spacing(10)
+        .push(labeled_bar(
+            remaining_percent(snapshot.percent),
+            usage_color(snapshot.percent),
+            format_remaining_percent(snapshot.percent),
+        ))
+        .push(labeled_bar(time_fill, time_color, window.label))
+        .into()
 }
 
 async fn poll_usage(renewals: Vec<renew::RenewJob>, targets: Vec<IconTarget>) -> PollDone {

@@ -15,12 +15,18 @@ pub struct UsageSnapshot {
     pub account_id: String,
     pub percent: f32,
     pub used: Option<f64>,
+    /// On-demand cap, when the payload has one. The popup does not print it.
+    #[allow(dead_code)]
     pub limit: Option<f64>,
     pub resets_at: Option<DateTime<Utc>>,
     pub starts_at: Option<DateTime<Utc>>,
+    /// Billing window kind from the payload. The popup does not print it.
+    #[allow(dead_code)]
     pub period_type: Option<String>,
     pub plan: Option<String>,
     pub email: Option<String>,
+    /// When this reading was parsed. The popup does not print it.
+    #[allow(dead_code)]
     pub fetched_at: DateTime<Utc>,
     /// `creditUsagePercent` came from a unified weekly pool. Product rows are
     /// a breakdown of that same pool and were not added.
@@ -420,30 +426,90 @@ pub fn format_percent(percent: f32) -> String {
     format!("{:.0}%", percent.round())
 }
 
-pub fn format_remaining(end: DateTime<Utc>) -> String {
-    let delta = end - Utc::now();
+/// Percent of the quota still unused. Non-finite `used` is `0.0` so a bad
+/// reading does not draw a full bar. Values outside 0..=100 clamp.
+pub fn remaining_percent(used: f32) -> f32 {
+    if !used.is_finite() {
+        return 0.0;
+    }
+    (100.0 - used).clamp(0.0, 100.0)
+}
+
+/// Whole-number label for the usage bar, e.g. `72% remaining`.
+pub fn format_remaining_percent(used: f32) -> String {
+    let shown = remaining_percent(used).round();
+    format!("{}% remaining", shown as i32)
+}
+
+/// Compact time until reset. Day-scale values keep leftover hours and drop
+/// minutes. Hour-scale values keep leftover minutes. Under a minute the
+/// seconds are shown, so a short remainder is not rounded up to `1m`.
+/// Zero or a past reset is `0m`.
+pub fn format_reset_duration(delta: chrono::Duration) -> String {
     let secs = delta.num_seconds();
     if secs <= 0 {
-        return "reset pending".into();
+        return "0m".into();
     }
     let days = secs / 86_400;
     let hours = (secs % 86_400) / 3_600;
     let mins = (secs % 3_600) / 60;
     if days > 0 {
-        format!("resets in {days}d {hours}h")
+        if hours > 0 {
+            format!("{days}d {hours}h")
+        } else {
+            format!("{days}d")
+        }
     } else if hours > 0 {
-        format!("resets in {hours}h {mins}m")
+        if mins > 0 {
+            format!("{hours}h {mins}m")
+        } else {
+            format!("{hours}h")
+        }
+    } else if mins > 0 {
+        format!("{mins}m")
     } else {
-        format!("resets in {mins}m")
+        format!("{secs}s")
     }
 }
 
-pub fn period_label(period_type: Option<&str>) -> &'static str {
-    match period_type {
-        Some(t) if t.contains("WEEKLY") => "Weekly",
-        Some(t) if t.contains("MONTHLY") => "Monthly",
-        Some(t) if t.contains("DAILY") => "Daily",
-        _ => "Credits",
+/// How full the time-remaining bar is, and the duration label beside it.
+///
+/// `fill_percent` is `(resets_at - now) / (resets_at - starts_at)` as a
+/// percent, clamped to 0..=100. It is `None` when start and end do not form
+/// a positive window (no start, or start that is not before end). The popup
+/// draws `None` as an empty bar. A 7-day week is not assumed when start is
+/// missing. The label is only the compact duration, or `—` when there is no
+/// reset time to measure.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResetWindow {
+    pub fill_percent: Option<f32>,
+    pub label: String,
+}
+
+pub fn reset_window(
+    now: DateTime<Utc>,
+    starts_at: Option<DateTime<Utc>>,
+    resets_at: Option<DateTime<Utc>>,
+) -> ResetWindow {
+    let Some(end) = resets_at else {
+        return ResetWindow {
+            fill_percent: None,
+            label: "—".into(),
+        };
+    };
+    let label = format_reset_duration(end - now);
+    let fill_percent = starts_at.and_then(|start| {
+        let window_ms = (end - start).num_milliseconds();
+        if window_ms <= 0 {
+            return None;
+        }
+        let left_ms = (end - now).num_milliseconds();
+        let fraction = (left_ms as f64 / window_ms as f64).clamp(0.0, 1.0);
+        Some((fraction * 100.0) as f32)
+    });
+    ResetWindow {
+        fill_percent,
+        label,
     }
 }
 
@@ -460,7 +526,11 @@ mod tests {
         assert!(snap.resets_at.is_some());
         assert!(snap.starts_at.is_some());
         assert!(snap.starts_at < snap.resets_at);
-        assert_eq!(period_label(snap.period_type.as_deref()), "Weekly");
+        assert!(
+            snap.period_type
+                .as_deref()
+                .is_some_and(|period| period.contains("WEEKLY"))
+        );
     }
 
     #[test]
@@ -524,7 +594,11 @@ mod tests {
         assert_eq!(snap.percent, 0.0);
         assert_eq!(snap.used, None);
         assert_eq!(snap.limit, None);
-        assert_eq!(period_label(snap.period_type.as_deref()), "Weekly");
+        assert!(
+            snap.period_type
+                .as_deref()
+                .is_some_and(|period| period.contains("WEEKLY"))
+        );
         assert!(snap.resets_at.is_some());
     }
 
@@ -599,5 +673,97 @@ mod tests {
         assert!((pool.percent - 12.5).abs() < f32::EPSILON);
         assert_ne!(pool.percent, 8.0 + 3.0);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn stamp(raw: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(raw)
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn remaining_percent_clamps_and_rejects_non_finite() {
+        assert_eq!(remaining_percent(28.0), 72.0);
+        assert_eq!(remaining_percent(0.0), 100.0);
+        assert_eq!(remaining_percent(100.0), 0.0);
+        assert_eq!(remaining_percent(140.0), 0.0);
+        assert_eq!(remaining_percent(-20.0), 100.0);
+        assert_eq!(remaining_percent(f32::NAN), 0.0);
+        assert_eq!(remaining_percent(f32::INFINITY), 0.0);
+        assert_eq!(remaining_percent(f32::NEG_INFINITY), 0.0);
+        assert!((remaining_percent(23.4) - 76.6).abs() < 0.001);
+        assert_eq!(format_remaining_percent(28.0), "72% remaining");
+        assert_eq!(format_remaining_percent(23.4), "77% remaining");
+        assert_eq!(format_remaining_percent(0.0), "100% remaining");
+        assert_eq!(format_remaining_percent(100.0), "0% remaining");
+        assert_eq!(format_remaining_percent(99.6), "0% remaining");
+        assert_eq!(format_remaining_percent(0.4), "100% remaining");
+        assert!(!format_remaining_percent(28.0).contains("reset"));
+    }
+
+    #[test]
+    fn time_remaining_fraction_clamps_past_reset_and_missing_data() {
+        let start = stamp("2026-08-13T19:00:00Z");
+        let end = stamp("2026-08-20T19:00:00Z");
+        let mid = start + (end - start) / 2;
+        let half = reset_window(mid, Some(start), Some(end));
+        assert!((half.fill_percent.unwrap() - 50.0).abs() < 0.05, "{half:?}");
+
+        let past = reset_window(end + chrono::Duration::hours(2), Some(start), Some(end));
+        assert_eq!(past.fill_percent, Some(0.0));
+        assert_eq!(past.label, "0m");
+
+        let at_end = reset_window(end, Some(start), Some(end));
+        assert_eq!(at_end.fill_percent, Some(0.0));
+        assert_eq!(at_end.label, "0m");
+
+        let before = reset_window(start - chrono::Duration::hours(1), Some(start), Some(end));
+        assert_eq!(before.fill_percent, Some(100.0));
+        assert_eq!(before.label, "7d 1h");
+
+        let missing_start = reset_window(start, None, Some(end));
+        assert_eq!(missing_start.fill_percent, None);
+        assert_eq!(missing_start.label, "7d");
+
+        let missing_end = reset_window(start, Some(start), None);
+        assert_eq!(missing_end.fill_percent, None);
+        assert_eq!(missing_end.label, "—");
+
+        let neither = reset_window(start, None, None);
+        assert_eq!(neither.fill_percent, None);
+        assert_eq!(neither.label, "—");
+
+        let zero = reset_window(start, Some(end), Some(end));
+        assert_eq!(zero.fill_percent, None);
+        assert_eq!(zero.label, "7d");
+
+        let inverted = reset_window(start, Some(end), Some(start));
+        assert_eq!(inverted.fill_percent, None);
+        assert_eq!(inverted.label, "0m");
+    }
+
+    #[test]
+    fn reset_duration_is_compact_and_has_no_reset_sentence() {
+        let hours = chrono::Duration::hours;
+        let mins = chrono::Duration::minutes;
+        let secs = chrono::Duration::seconds;
+        assert_eq!(format_reset_duration(hours(3) + mins(12)), "3h 12m");
+        assert_eq!(
+            format_reset_duration(chrono::Duration::days(2) + hours(4)),
+            "2d 4h"
+        );
+        assert_eq!(format_reset_duration(chrono::Duration::days(2)), "2d");
+        assert_eq!(format_reset_duration(hours(5)), "5h");
+        assert_eq!(format_reset_duration(mins(45)), "45m");
+        assert_eq!(format_reset_duration(secs(30)), "30s");
+        assert_eq!(format_reset_duration(secs(0)), "0m");
+        assert_eq!(format_reset_duration(secs(-5)), "0m");
+        assert_eq!(
+            format_reset_duration(chrono::Duration::days(1) + mins(30)),
+            "1d"
+        );
+        let sample = format_reset_duration(hours(3) + mins(12));
+        assert!(!sample.contains("reset"));
+        assert!(!sample.contains("remain"));
     }
 }

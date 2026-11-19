@@ -8,6 +8,8 @@ mod chip;
 mod config;
 mod grok_cli;
 mod login;
+// The popup no longer shows a pace line. The math stays for tests.
+#[cfg(test)]
 mod pace;
 mod renew;
 mod ring;

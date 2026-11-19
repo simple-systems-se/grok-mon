@@ -1,40 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="440" height="620" viewBox="0 0 440 620" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="440" height="280" viewBox="0 0 440 280" role="img" aria-labelledby="title desc">
   <title id="title">Illustration of the Grok Monitor popup</title>
-  <desc id="desc">Sample popup layout. Names, percents, and times are not a live reading.</desc>
-  <rect width="440" height="620" fill="#141416"/>
+  <desc id="desc">Sample popup with a usage bar labeled 72% remaining and a time bar labeled 3h 12m. Not a live reading. Sign-in replaces these bars when the icon has no session.</desc>
+  <rect width="440" height="280" fill="#141416"/>
   <text x="24" y="28" fill="#a1a1aa" font-family="sans-serif" font-size="13">Illustration — sample popup, not a live reading</text>
-  <rect x="24" y="44" width="392" height="552" rx="16" fill="#1c1c1e" stroke="#3a3a40"/>
+  <rect x="24" y="44" width="392" height="168" rx="16" fill="#1c1c1e" stroke="#3a3a40"/>
 
-  <text x="44" y="80" fill="#f4f4f5" font-family="sans-serif" font-size="20" font-weight="600">Example plan</text>
-  <text x="44" y="104" fill="#a1a1aa" font-family="sans-serif" font-size="13">name@example.com</text>
-  <text x="44" y="124" fill="#a1a1aa" font-family="sans-serif" font-size="13">CLI home: ~/.grok</text>
-  <text x="44" y="144" fill="#a1a1aa" font-family="sans-serif" font-size="13">Shared weekly pool</text>
-  <line x1="44" y1="160" x2="396" y2="160" stroke="#3a3a40"/>
+  <rect x="44" y="78" width="220" height="10" rx="5" fill="#3a3a40"/>
+  <rect x="44" y="78" width="158" height="10" rx="5" fill="#3d9a45"/>
+  <text x="276" y="88" fill="#f4f4f5" font-family="sans-serif" font-size="14">72% remaining</text>
 
-  <rect x="44" y="176" width="352" height="10" rx="5" fill="#3a3a40"/>
-  <rect x="44" y="176" width="84" height="10" rx="5" fill="#2eb852"/>
-  <text x="44" y="204" fill="#8e8e96" font-family="sans-serif" font-size="11">0</text>
-  <text x="204" y="204" fill="#8e8e96" font-family="sans-serif" font-size="11">50</text>
-  <text x="376" y="204" fill="#8e8e96" font-family="sans-serif" font-size="11">100</text>
+  <rect x="44" y="118" width="220" height="10" rx="5" fill="#3a3a40"/>
+  <rect x="44" y="118" width="96" height="10" rx="5" fill="#d4d4d8"/>
+  <text x="276" y="128" fill="#f4f4f5" font-family="sans-serif" font-size="14">3h 12m</text>
 
-  <text x="44" y="232" fill="#f4f4f5" font-family="sans-serif" font-size="15">Weekly · 24%</text>
-  <text x="44" y="256" fill="#a1a1aa" font-family="sans-serif" font-size="13">resets in 3d 4h</text>
-  <text x="44" y="276" fill="#a1a1aa" font-family="sans-serif" font-size="13">Will run out in 2d 4h</text>
-  <text x="44" y="296" fill="#a1a1aa" font-family="sans-serif" font-size="13">updated 12s ago</text>
-  <text x="44" y="324" fill="#d4d4d8" font-family="sans-serif" font-size="14">1 live · example-project</text>
-  <line x1="44" y1="344" x2="396" y2="344" stroke="#3a3a40"/>
-
-  <rect x="44" y="364" width="352" height="40" rx="8" fill="#3a3a40"/>
-  <text x="220" y="390" fill="#f4f4f5" font-family="sans-serif" font-size="14" text-anchor="middle">Sign out</text>
-
-  <rect x="44" y="416" width="240" height="40" rx="8" fill="#3a3a40"/>
-  <text x="164" y="442" fill="#f4f4f5" font-family="sans-serif" font-size="14" text-anchor="middle">Open usage</text>
-  <rect x="296" y="416" width="100" height="40" rx="8" fill="#3a3a40"/>
-  <text x="346" y="442" fill="#f4f4f5" font-family="sans-serif" font-size="14" text-anchor="middle">Copy</text>
-
-  <text x="44" y="484" fill="#8eb4ff" font-family="sans-serif" font-size="14">Settings…</text>
-  <text x="44" y="520" fill="#8e8e96" font-family="sans-serif" font-size="12">Sign in replaces this button when the icon has no session.</text>
-  <text x="44" y="540" fill="#8e8e96" font-family="sans-serif" font-size="12">The device-code URL and user code appear here during sign-in.</text>
-  <text x="44" y="568" fill="#8e8e96" font-family="sans-serif" font-size="12">Sample copy only. Your popup shows the plan and email</text>
-  <text x="44" y="586" fill="#8e8e96" font-family="sans-serif" font-size="12">returned for that CLI home.</text>
+  <text x="44" y="168" fill="#8e8e96" font-family="sans-serif" font-size="12">Sample copy. Sign in replaces these bars when</text>
+  <text x="44" y="186" fill="#8e8e96" font-family="sans-serif" font-size="12">the icon has no session.</text>
 </svg>

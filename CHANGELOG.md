@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.4
+
+- A signed-in Grok popup that has a reading shows two bars and nothing else.
+  The usage bar is percent remaining (`100 − used`, clamped to 0–100),
+  labeled `72% remaining`. The bar under it is the fraction of the current
+  window still left, labeled only with the compact time until reset
+  (`3h 12m`, `2d 4h`).
+- Reset sentences, the pace line, the plan, the email, and the other status
+  lines are not shown in that state. Sign-in, errors, and loading stay.
+- If the payload has a reset time but no positive window, the duration label
+  is shown and the time bar is empty. A missing reset time uses `—` and an
+  empty bar. The applet does not assume a 7-day week.
+
 ## 0.4.3
 
 - When the access token in a chip's CLI home is within 5 minutes of

@@ -44,20 +44,8 @@ pub fn ring_icon<'a, Message: 'a>(applet: &Context, svg: String) -> Element<'a, 
 }
 
 pub fn usage_bar<'a, Message: 'a>(fill_percent: f32, used_percent: f32) -> Element<'a, Message> {
-    let fill = usage_color(used_percent);
-    let mut track: Color = theme::active().cosmic().bg_component_color().into();
-    track.a = 1.0;
-    let filled = (fill_percent.clamp(0.0, 100.0) * 10.0).round() as u16;
-    let rest = 1000u16.saturating_sub(filled);
-    let mut bar = row::with_capacity(2);
-    if filled > 0 {
-        bar = bar.push(bar_segment(filled, fill));
-    }
-    if rest > 0 {
-        bar = bar.push(bar_segment(rest, track));
-    }
     column::with_capacity(2)
-        .push(container(bar).width(Length::Fill))
+        .push(fill_track(fill_percent, usage_color(used_percent)))
         .push(
             row::with_capacity(5)
                 .push(text::caption("0"))
@@ -68,6 +56,38 @@ pub fn usage_bar<'a, Message: 'a>(fill_percent: f32, used_percent: f32) -> Eleme
         )
         .spacing(4)
         .into()
+}
+
+/// A full-width meter with its label on the right. `fill_percent` is clamped
+/// to 0..=100. A missing fraction is passed as `0.0` (empty track).
+pub fn labeled_bar<'a, Message: 'a>(
+    fill_percent: f32,
+    color: Color,
+    label: impl Into<String>,
+) -> Element<'a, Message> {
+    row::with_capacity(2)
+        .push(fill_track(fill_percent, color))
+        .push(text::body(label.into()))
+        .align_y(Vertical::Center)
+        .spacing(8)
+        .into()
+}
+
+fn fill_track<'a, Message: 'a>(fill_percent: f32, color: Color) -> Element<'a, Message> {
+    let mut track: Color = theme::active().cosmic().bg_component_color().into();
+    track.a = 1.0;
+    let mut fill = color;
+    fill.a = 1.0;
+    let filled = (fill_percent.clamp(0.0, 100.0) * 10.0).round() as u16;
+    let rest = 1000u16.saturating_sub(filled);
+    let mut bar = row::with_capacity(2);
+    if filled > 0 {
+        bar = bar.push(bar_segment(filled, fill));
+    }
+    if rest > 0 {
+        bar = bar.push(bar_segment(rest, track));
+    }
+    container(bar).width(Length::Fill).into()
 }
 
 fn bar_segment<'a, Message: 'a>(portion: u16, color: Color) -> Element<'a, Message> {

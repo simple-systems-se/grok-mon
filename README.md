@@ -237,8 +237,8 @@ choose Grok Monitor icons.
 | `show_sparkline` | `false` | Grok and API | Draw a small history beside the chip. |
 | `show_percent` | `true` | Grok | Show the whole-number percent on the chip. `—`, `…`, and `?` still show when there is no reading. |
 | `show_percent` | `true` | API | Show the dollar amount on the chip. The settings row calls this “Amount on panel”. |
-| `show_remaining` | `false` | Grok | `false` shows percent used. `true` shows percent remaining. The ring fill follows this. Color always follows percent used. |
-| `show_pace` | `true` | Grok | Show the weekly pace line in the popup. |
+| `show_remaining` | `false` | Grok | `false` shows percent used on the chip. `true` shows percent remaining on the chip. The ring fill follows this. Color always follows percent used. The popup usage bar always shows percent remaining. |
+| `show_pace` | `true` | Grok | Still loaded and saved. The popup does not show a pace line. Settings keeps the switch. |
 | `account_labels` | `{}` | API, and preserved on Grok | Map of chip id to label. Grok Monitor chip text comes from `accounts[].label`. The map is still loaded and written back with the rest of the config, so an existing file is kept. API Monitor uses the entry `"default"`. |
 | `accounts` | the two icons above | Grok | Panel icons. See the table in [Configure accounts](#configure-accounts). |
 | `grok_path` | `""` | Grok | Optional path to the `grok` binary. Empty means search. See below. |
@@ -366,34 +366,50 @@ number.
 
 ![Illustration of the usage popup](docs/popup.svg)
 
-*Illustration. The plan name, address, percent, and times in the picture are sample copy, not a live reading.*
+*Illustration. The percent and the duration in the picture are sample copy, not a live reading. A signed-in popup with a reading is these two bars.*
 
 The chip is a circular usage ring (the same shape Minimon uses for memory)
 with a hammer (Grok) or a key (API) in the center. The ring, the track, and
 the popup body use opaque theme colors. By default a Grok chip shows the
 shared pool as a whole percent used. Settings can hide the number or switch
-the number and the ring fill to percent remaining.
+the number and the ring fill to percent remaining. The chip text does not
+include a reset countdown.
 
 Color follows percent **used**, with a distinct shade at each whole percent:
 green through 50%, yellow through 80%, orange through 90%, red above that.
 For API, percent used is remaining prepaid mapped against a $50 full wallet
 (green above $25, yellow through $10, orange through $5, red under $5).
 
-Click a Grok chip for a popup with:
+Click a Grok chip that has a reading and does not need an action. The popup
+shows two bars and nothing else:
 
-- Plan name and account email, when the session and billing payload include them
-- The icon's CLI home, as you wrote it
-- **Shared weekly pool** when the account is on unified billing
-- Usage bar (0–100, colored like the ring) and percent
-- Weekly or monthly reset time
-- Weekly pace, unless you turned it off
-- How long ago usage was fetched
-- Live Grok CLI session count for that icon's CLI home (`active_sessions.json`,
-  checked against `/proc`)
-- **Sign in** or **Sign out** for that icon only
-- **Open usage**, which opens [grok.com usage](https://grok.com/?_s=usage)
-- **Copy**, which copies the percent shown
-- **Settings**
+- **Usage bar.** The fill is percent remaining (`100 − used`, clamped to
+  0–100). The label is that percent, rounded, as `72% remaining`. Color still
+  follows percent used, so a short remaining bar is red.
+- **Time bar,** directly under it. The fill is the fraction of the current
+  window still left: `(reset − now) / (reset − start)`, clamped to 0–100.
+  The label is only the compact time until reset, such as `3h 12m` or
+  `2d 4h`. It does not say “resets in” or “resets at”.
+
+There is no plan name, email, CLI home, pace sentence, “updated … ago” line,
+or live-session line in that state. **Sign out**, **Open usage**, **Copy**,
+and **Settings** are not on that popup either. Edit the COSMIC config files
+for those keys, or use **Settings** from a popup that has no reading.
+
+The window length comes from the billing period start and end. If the payload
+has a reset time but no positive start→end window, the duration label is
+still shown and the time bar is empty. The applet does not assume a 7-day
+week. If the reset time itself is missing, the label is `—` and the bar is
+empty. A reset that is already past shows `0m` and an empty time bar.
+
+When the icon has no reading, the popup keeps the controls that need you:
+
+- **Sign in**, or the device-code URL, user code, **Copy URL**, **Copy code**,
+  and **Cancel** while sign-in is in progress
+- The error text, when the last request failed or the CLI home is unusable
+- **Sign out** when a reading is on screen and a sign-out or a failed poll
+  still needs the button
+- **Open usage**, **Copy**, and **Settings** only when there is no reading
 
 | Chip | Meaning |
 |------|---------|
@@ -446,37 +462,14 @@ names the chip index and the CLI home only.
 
 ## Weekly pace
 
-On a weekly window the popup adds a line about when the remaining quota hits
-zero if the current burn continues. The sentences below are the wording the
-applet uses. The numbers are examples of that wording, not a measurement from
-a real account.
+`show_pace` is still loaded and saved, and Settings still has the switch.
+Version 0.4.4 does not draw a pace line. The popup's second bar is the time
+left in the current window (`reset − now`, over `reset − start`). It is not
+a burn-rate forecast, and it does not assume a 7-day week when the payload
+has no period start.
 
-- `Will run out in 2d 4h` when that time is **before** the next reset
-- `Won't run out before reset · ~60% left at reset` when the quota lasts the week
-- `Week just started` early in the week, while usage is still too small to trust
-- `Out of credits` at 100% used, or `At limit` within half a percent of the cap
-- `Pace unavailable` when the window is marked weekly but start and end are unusable
-
-The burn rate is **constant from the period start**: used percent divided by
-how long the period has been open. Time to exhaustion is the remaining percent
-divided by that rate. The payload has no separate “since the last poll” rate.
-`~N% left` is the unused percent at reset under that same burn
-(`100 − used% / elapsed fraction`). A reading that is exactly even (`used %`
-equals elapsed % of the week) lands on `~0% left at reset`. An 80% used
-reading halfway through the week runs out in about 21 hours, not at reset.
-
-The line does not call a hot burn “on track.” The popup already has a reset
-countdown, so the pace line leads with exhaustion time when credits will not
-last the week.
-
-The first ~1% of the week (and any moment before the period opens) shows
-`Week just started` unless usage is already at least 5%. A fast start that has
-already used 5% or more still reports `Will run out in …`.
-
-Pace uses `currentPeriod.start` → `end` from the billing payload when present.
-Otherwise the start is seven days before the reset. Pace is hidden when there
-is no reset time, or when the window is not weekly (monthly or daily). API
-prepaid has no weekly quota window, so that applet has no pace line.
+Grok API Monitor has no usage-window start or end, so its popup is unchanged:
+remaining prepaid dollars, optional spend, key names, and **Open console**.
 
 ## Grok API Monitor
 
